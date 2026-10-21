@@ -42,7 +42,7 @@ ASSIGN = re.compile(
 def main() -> int:
     findings = []
     for p in sorted(ROOT.rglob('*.ets')):
-        rel = str(p.relative_to(ROOT))
+        rel = p.relative_to(ROOT).as_posix()
         if not (rel.startswith('core/') or rel.startswith('service/')):
             continue
         if rel.startswith(SKIP_PREFIXES):

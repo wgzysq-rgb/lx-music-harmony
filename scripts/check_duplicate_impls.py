@@ -64,7 +64,7 @@ def main() -> int:
     for p in sorted(ROOT.rglob('*.ets')):
         for name, line, body in extract(p):
             key = hashlib.md5(normalize(body).encode()).hexdigest()
-            groups.setdefault(key, []).append((str(p.relative_to(ROOT)), line, name))
+            groups.setdefault(key, []).append((p.relative_to(ROOT).as_posix(), line, name))
 
     dupes = 0
     for key, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):

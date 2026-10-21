@@ -37,7 +37,7 @@ def main() -> int:
         return '\n'.join(kept)
 
     for p in sorted(ROOT.rglob('*.ets')):
-        rel = str(p.relative_to(ROOT))
+        rel = p.relative_to(ROOT).as_posix()
         if not (rel.startswith('service/') or rel.startswith('core/')):
             continue
         text = p.read_text()
@@ -63,7 +63,7 @@ def main() -> int:
                     if other == p:
                         continue
                     if re.search(re.escape(single) + r'\.' + method + r'\(', code_only(other.read_text())):
-                        callers.append(str(other.relative_to(ROOT)))
+                        callers.append(other.relative_to(ROOT).as_posix())
                 if not callers:
                     findings.append(f'{rel}: {single}.{method}() 没有任何调用方（服务等于没初始化）')
     print('\n'.join(findings) if findings else 'all service initializers are wired')

@@ -51,7 +51,7 @@ def scan() -> tuple:
     for wrapper in WRITE_WRAPPERS:
         call_exp += r'|' + wrapper + r'\(\{([^}]*)\}'
     for p in ROOT.rglob('*.ets'):
-        rel = str(p.relative_to(ROOT))
+        rel = p.relative_to(ROOT).as_posix()
         if rel in INFRA:
             continue
         text = p.read_text()

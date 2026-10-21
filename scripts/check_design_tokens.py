@@ -37,7 +37,7 @@ def main():
     # 但同样必须走 MediaOverlayTokens / DesignTokens，所以一并纳入扫描
     for folder in ('pages', 'components', 'widget', 'liveview'):
         for p in sorted((ROOT / folder).rglob('*.ets')):
-            rel = str(p.relative_to(ROOT))
+            rel = p.relative_to(ROOT).as_posix()
             text = p.read_text()
             for m in FONT.finditer(text):
                 line = text[:m.start()].count('\n') + 1

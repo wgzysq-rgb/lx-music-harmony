@@ -10,7 +10,8 @@
 不检查的页面（按设计不参与内容列居中）：
 - Index / NavIndex：导航容器；
 - DesktopLyricPage：独立的系统桌面歌词窗口，本身就是全屏透明层；
-- PlayDetailPage：播放页用 isWide 切双栏/单栏，不算内容列。
+- PlayDetailPage：播放页用 isWide 切双栏/单栏，不算内容列；
+- CarPage：车机整屏界面，比例按车机中控屏（横向、固定深色）设计，不做内容列居中。
 
 用法：python3 scripts/check_responsive.py
 """
@@ -18,7 +19,7 @@ import pathlib
 import sys
 
 PAGES = pathlib.Path(__file__).resolve().parent.parent / 'entry/src/main/ets/pages'
-SKIP = {'Index.ets', 'NavIndex.ets', 'DesktopLyricPage.ets', 'PlayDetailPage.ets'}
+SKIP = {'Index.ets', 'NavIndex.ets', 'DesktopLyricPage.ets', 'PlayDetailPage.ets', 'CarPage.ets'}
 TOKENS = ('Breakpoints.contentInset', 'Breakpoints.isWide', 'Breakpoints.isLarge')
 
 

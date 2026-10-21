@@ -50,7 +50,7 @@ def main() -> int:
             if key not in text:
                 findings.append(f'{rel}（{label}）: 没有响应「列表显示」设置 {key}')
     for p in sorted(ROOT.rglob('*.ets')):
-        rel = str(p.relative_to(ROOT))
+        rel = p.relative_to(ROOT).as_posix()
         if rel == ROW_TEXTS:
             continue
         for i, line in enumerate(p.read_text().split('\n')):

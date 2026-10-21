@@ -78,7 +78,7 @@ def main() -> int:
     skipped_horizontal = 0
     for path in sorted(ROOT.rglob('*.ets')):
         text = path.read_text()
-        rel = str(path.relative_to(ROOT))
+        rel = path.relative_to(ROOT).as_posix()
         for match in re.finditer(r'\bScroll\(', text):
             start = match.start()
             if '{' not in text[start:start + 200]:

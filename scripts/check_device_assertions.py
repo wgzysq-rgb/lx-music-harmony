@@ -33,7 +33,8 @@ def code_files() -> list:
     out = []
     for p in ETS.rglob('*.ets'):
         text = p.read_text()
-        out.append((str(p.relative_to(ETS)), text, ' '.join(text.split())))
+        # as_posix()：Windows 上 relative_to 会产出反斜杠，而 SHARED_LOG_TAGS 里写的是 '/'
+        out.append((p.relative_to(ETS).as_posix(), text, ' '.join(text.split())))
     return out
 
 

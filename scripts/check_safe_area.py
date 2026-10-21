@@ -28,7 +28,7 @@ SKIP = {
 def main() -> int:
     problems = []
     for path in sorted(ROOT.rglob('*.ets')):
-        rel = str(path.relative_to(ROOT))
+        rel = path.relative_to(ROOT).as_posix()
         if rel in SKIP:
             continue
         text = path.read_text()

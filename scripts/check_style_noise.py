@@ -24,7 +24,7 @@ def main() -> int:
     findings = []
     for p in sorted(ROOT.rglob('*.ets')):
         lines = p.read_text().split('\n')
-        rel = str(p.relative_to(ROOT))
+        rel = p.relative_to(ROOT).as_posix()
         for i in range(len(lines) - 1):
             cur, nxt = lines[i], lines[i + 1]
             cur_body, nxt_body = cur.strip(), nxt.strip()

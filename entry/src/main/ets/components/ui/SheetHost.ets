@@ -49,6 +49,8 @@ export struct SheetHost {
   @State rows: SheetRow[] = [];
   @State message: string = '';
   private pending: SheetRequest | null = null;
+  /** 延迟收起用的定时器句柄（-1 表示没有待执行的） */
+  private closeTimer: number = -1;
   /**
    * 注册给 SheetService 的投递函数。
    *
@@ -86,6 +88,10 @@ export struct SheetHost {
   }
 
   aboutToDisappear() {
+    if (this.closeTimer !== -1) {
+      clearTimeout(this.closeTimer);
+      this.closeTimer = -1;
+    }
     sheetService.unregister(this.presenter);
     this.pending = null;
   }
@@ -107,7 +113,12 @@ export struct SheetHost {
     this.pending = null;
     request.resolve(result);
     hilog.info(DOMAIN, TAG, 'finish result=[%{public}s]', result);
-    setTimeout((): void => {
+    // 只保留最新一个待执行的收起：连续 finish 时旧的那个已无意义
+    if (this.closeTimer !== -1) {
+      clearTimeout(this.closeTimer);
+    }
+    this.closeTimer = setTimeout((): void => {
+      this.closeTimer = -1;
       if (this.pending === null) {
         this.visible = false;
         this.overlayVisible = false;

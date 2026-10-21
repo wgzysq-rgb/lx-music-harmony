@@ -8,6 +8,7 @@
 判定：`pages/` 下的内容页必须挂载 `PlayerBar`。以下页面按设计不挂：
 - Index / NavIndex：导航容器，不含内容；
 - PlayDetailPage：全屏播放页，本身是播放控制；
+- CarPage：车机整屏界面，本身是播放控制，且驾驶场景要尽量少可点区域；
 - DesktopLyricPage：独立桌面歌词窗口；
 - LogPage：诊断页，不属于内容浏览路径；
 - DownloadPage：它是首页「下载管理」Tab 的内容，迷你条由外层 HomePage/MainPane 提供
@@ -19,8 +20,8 @@ import pathlib
 import sys
 
 PAGES = pathlib.Path(__file__).resolve().parent.parent / 'entry/src/main/ets/pages'
-SKIP = {'Index.ets', 'NavIndex.ets', 'PlayDetailPage.ets', 'DesktopLyricPage.ets', 'LogPage.ets',
-        'DownloadPage.ets'}
+SKIP = {'Index.ets', 'NavIndex.ets', 'PlayDetailPage.ets', 'CarPage.ets', 'DesktopLyricPage.ets',
+        'LogPage.ets', 'DownloadPage.ets'}
 
 
 def main() -> int:

@@ -80,7 +80,7 @@ def main():
 
     unreachable = []
     for p in files:
-        rel = str(p.relative_to(root))
+        rel = p.relative_to(root).as_posix()
         if p not in seen and rel not in ALLOWED:
             unreachable.append(rel)
     unreachable.sort()

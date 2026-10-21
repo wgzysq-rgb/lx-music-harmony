@@ -29,7 +29,7 @@ SKIP_PREFIX = ('core/theme/data/', 'core/music/sources/kw/leaderboard', 'core/mu
 def main():
     findings = []
     for p in sorted(ROOT.rglob('*.ets')):
-        rel = str(p.relative_to(ROOT))
+        rel = p.relative_to(ROOT).as_posix()
         if rel.startswith(SKIP_PREFIX):
             continue
         lines = [re.sub(r'\s+', ' ', l.strip()) for l in p.read_text().split('\n')]
