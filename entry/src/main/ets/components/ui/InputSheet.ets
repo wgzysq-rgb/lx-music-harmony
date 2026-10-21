@@ -22,11 +22,25 @@ export struct InputSheet {
   @Prop value: string = '';
   /** 键盘类型：普通文本 / 数字（下载并发数等） */
   @Prop numberOnly: boolean = false;
+  /**
+   * 关闭由外部宿主（SheetHost）统一负责时不写 visible。
+   * 面板切换时本组件被卸载，bindSheet 销毁补发的 onDisappear 会在父组件渲染期间
+   * 往 @Link visible 写状态（框架报错），托管模式下只回传取消、不碰 visible。
+   * 页面直接使用时保持 false，行为不变。
+   */
+  @Prop hostControlled: boolean = false;
   onSubmit?: (value: string) => void;
   /** 关闭（点遮罩/取消） */
   onCancel?: () => void;
 
   private cancel(): void {
+    if (this.hostControlled) {
+      // 宿主托管：visible 由 SheetHost.finish 统一收，这里只回传取消
+      if (this.onCancel) {
+        this.onCancel();
+      }
+      return;
+    }
     this.visible = dismissSheet(this.onCancel);
   }
 

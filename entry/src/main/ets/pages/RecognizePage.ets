@@ -32,7 +32,7 @@ import { emitSearchRequest } from '../service/EventBus';
 import { hapticService } from '../service/HapticService';
 import { showSongItemMenu } from './SonglistDetail/SonglistMenus';
 import {
-  addRowToDefaultList,
+  addRowToList,
   addRowToDislike,
   downloadRow,
   openInBrowser,
@@ -40,6 +40,7 @@ import {
   sourceDetailUrl,
 } from './SonglistDetail/SonglistRowActions';
 import type { SongItem } from './SonglistDetail/SonglistTypes';
+import type { AddToListOutcome } from './SonglistDetail/SonglistRowActions';
 import {
   isBusy,
   recognizedToMusicInfo,
@@ -284,8 +285,12 @@ export struct RecognizePage {
   }
 
   private async addToDefaultList(row: SongItem): Promise<void> {
-    const error: string = await addRowToDefaultList(row);
-    appToast(error.length === 0 ? tf('toast_added_to_default', [row.name]) : t('toast_operation_failed'));
+    const result: AddToListOutcome = await addRowToList(row);
+    if (result.cancelled) {
+      return;
+    }
+    appToast(result.error.length === 0
+      ? tf('toast_added_quoted', [result.listName]) : t('toast_operation_failed'));
   }
 
   private async downloadSong(row: SongItem): Promise<void> {

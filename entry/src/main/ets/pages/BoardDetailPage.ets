@@ -21,9 +21,10 @@ import { scrollerOffsetY } from '../utils/ScrollTools';
 import { parameterizedPageScrollKey, ScrollMemoryHandle } from '../service/ScrollMemoryService';
 import { ListRow } from '../components/ui/ListRow';
 import { showSongItemMenu } from './SonglistDetail/SonglistMenus';
-import { batchAddToDefaultList } from './SonglistDetail/SonglistActions';
+import { batchAddToList } from './SonglistDetail/SonglistActions';
 import { songRowToQueueItem } from '../core/list/SongMappers';
-import { addRowToDefaultList, addRowToDislike, openInBrowser, shareSongRow, sourceDetailUrl } from './SonglistDetail/SonglistRowActions';
+import { addRowToList, addRowToDislike, openInBrowser, shareSongRow, sourceDetailUrl } from './SonglistDetail/SonglistRowActions';
+import type { AddToListOutcome } from './SonglistDetail/SonglistRowActions';
 import { emitSearchRequest } from '../service/EventBus';
 import { appActionMenu } from '../service/DialogService';
 import type { SongItem } from './SonglistDetail/SonglistTypes';
@@ -401,12 +402,15 @@ export struct BoardDetailPage {
     }, { canEditPosition: false, canMoveToList: false });
   }
 
-  /** 收藏到默认列表（与歌单详情同一入口） */
+  /** 加入歌单（面板里选目标 / 新建，与歌单详情同一入口） */
   private async addToPlaylist(song: SongItem): Promise<void> {
-    const error = await addRowToDefaultList(song);
-    this.showToast(error.length === 0
-      ? tf('toast_added_to_default', [song.name])
-      : t('toast_add_to_list_failed') + ': ' + error);
+    const result: AddToListOutcome = await addRowToList(song);
+    if (result.cancelled) {
+      return;
+    }
+    this.showToast(result.error.length === 0
+      ? tf('toast_added_quoted', [result.listName])
+      : t('toast_add_to_list_failed') + ': ' + result.error);
   }
 
   /** 分享（按「设置 → 分享方式」走系统分享，失败回退剪贴板） */
@@ -460,7 +464,7 @@ export struct BoardDetailPage {
       return;
     }
     try {
-      const added: number = await batchAddToDefaultList(this.songList, (message: string): void => {
+      const added: number = await batchAddToList(this.songList, (message: string): void => {
         this.showToast(message);
       });
       this.showToast(tf('toast_added_to_default', [tf('count_songs', [added.toString()])]));

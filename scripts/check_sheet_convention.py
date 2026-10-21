@@ -21,8 +21,15 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent / 'entry/src/main/ets'
 
 # 允许自绘遮罩：面板套件自身 + 首次启动协议拦截（系统级全屏，不是页面内面板）
+# + components/ui/AddToTargetOverlay（选歌单浮层）。
+#
+# 后者是**有意的例外**：它几乎总是紧跟在动作菜单之后打开，而两个 bindSheet
+# 连续开关时后一个会被前一个的收起动画一起带走（实测新面板闪一下就没）。
+# 它挂在 NavIndex 顶层 Stack（不在 Scroll 里，不会被裁剪），只用条件渲染控制显隐，
+# 不创建窗口，从而绕开这个时序问题。文件名因此用 Overlay 而非 Sheet。
 MASK_ALLOWED = {
     'components/ui/BottomSheet.ets',
+    'components/ui/AddToTargetOverlay.ets',
     'pages/NavIndex.ets',
     'theme/DesignTokens.ets',
 }
@@ -33,7 +40,9 @@ def main() -> int:
     problems = []
     sheets = []
     for path in sorted(ROOT.rglob('*.ets')):
-        rel = str(path.relative_to(ROOT))
+        # 必须用 as_posix()：Windows 上 str(Path) 是反斜杠，与下面白名单里的
+        # 正斜杠写法永远匹配不上，会让所有白名单文件被误报（曾长期存在）。
+        rel = path.relative_to(ROOT).as_posix()
         text = path.read_text()
         if MASK_PATTERN in text and rel not in MASK_ALLOWED:
             problems.append(

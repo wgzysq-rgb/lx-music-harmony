@@ -437,7 +437,8 @@ export function buildEnUS(): Map<string, string> {
   m.set('confirm_remove_songs', 'Remove {0} song(s) from the playlist?');
   m.set('toast_removed_count', 'Removed {0} song(s)');
   m.set('toast_no_selection', 'Select songs first');
-  m.set('toast_batch_added', 'Added {0} song(s) to the default list');
+  m.set('toast_batch_added_to_list', 'Added {0} song(s) to "{1}"');
+  m.set('list_name_placeholder', 'Playlist name');
   m.set('toast_batch_downloaded', 'Queued {0} download(s)');
   m.set('confirm_download_songs', 'Download {0} song(s)?');
   m.set('toast_online_list_readonly', 'Online playlists are read-only. Sync to a local list first.');

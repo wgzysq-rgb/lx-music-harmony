@@ -441,7 +441,8 @@ export function buildZhCN(): Map<string, string> {
   m.set('confirm_remove_songs', '将移出 {0} 首歌曲，是否继续？');
   m.set('toast_removed_count', '已移出 {0} 首歌曲');
   m.set('toast_no_selection', '请先选择歌曲');
-  m.set('toast_batch_added', '已添加 {0} 首到默认列表');
+  m.set('toast_batch_added_to_list', '已把 {0} 首加入「{1}」');
+  m.set('list_name_placeholder', '歌单名称');
   m.set('toast_batch_downloaded', '已提交 {0} 首下载任务');
   m.set('confirm_download_songs', '将下载 {0} 首歌曲，是否继续？');
   m.set('toast_online_list_readonly', '在线歌单不支持移出，请先同步到本地歌单');

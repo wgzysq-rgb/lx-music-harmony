@@ -39,7 +39,7 @@ import {
   uncollectSonglist,
 } from './SonglistDetail/SonglistCollectActions';
 import {
-  batchAddToDefaultList,
+  batchAddToList,
   batchDownloadSongs,
   batchRemoveFromLocalList,
   downloadWholeList,
@@ -60,13 +60,14 @@ import {
 } from './SonglistDetail/SonglistListOps';
 import { persistLocalOrder, syncOnlineListToLocal } from './SonglistDetail/SonglistLocalLibrary';
 import {
-  addRowToDefaultList,
+  addRowToList,
   addRowToDislike,
   downloadRow,
   openInBrowser,
   shareSongRow,
   sourceDetailUrl,
 } from './SonglistDetail/SonglistRowActions';
+import type { AddToListOutcome } from './SonglistDetail/SonglistRowActions';
 import {
   playAllRows,
   playSongRow,
@@ -540,7 +541,7 @@ export struct SonglistDetailPage {
 
   /** 批量加入默认列表 */
   private async batchAddToPlaylist(): Promise<void> {
-    await batchAddToDefaultList(this.selectedSongs(), this.toast());
+    await batchAddToList(this.selectedSongs(), this.toast());
     this.exitSelectMode();
   }
 
@@ -838,12 +839,15 @@ export struct SonglistDetailPage {
       this.refreshLocalRows();
     }
   }
-  // 添加到歌单
+  // 添加到歌单（面板里选目标 / 新建）
   private async addToPlaylist(song: SongItem): Promise<void> {
-    const error = await addRowToDefaultList(song);
-    this.showToast(error.length === 0
-      ? tf('toast_added_to_default', [song.name])
-      : t('toast_add_to_list_failed') + ': ' + error);
+    const result: AddToListOutcome = await addRowToList(song);
+    if (result.cancelled) {
+      return;
+    }
+    this.showToast(result.error.length === 0
+      ? tf('toast_added_quoted', [result.listName])
+      : t('toast_add_to_list_failed') + ': ' + result.error);
   }
 
   // 下载单曲（从菜单调用）

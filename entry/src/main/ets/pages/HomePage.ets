@@ -18,13 +18,14 @@ import { appActionMenu, appToast } from '../service/DialogService';
 import { showSongItemMenu } from './SonglistDetail/SonglistMenus';
 import { songRowToQueueItem } from '../core/list/SongMappers';
 import {
-  addRowToDefaultList,
+  addRowToList,
   addRowToDislike,
   downloadRow,
   openInBrowser,
   shareSongRow,
   sourceDetailUrl,
 } from './SonglistDetail/SonglistRowActions';
+import type { AddToListOutcome } from './SonglistDetail/SonglistRowActions';
 import type { SongItem } from './SonglistDetail/SonglistTypes';
 import type { ShareResult } from '../service/ShareService';
 import { getStorageService } from '../core/interfaces/IStorageService';
@@ -852,7 +853,7 @@ export struct HomePage {
         appToast(tf('toast_play_later_added', [target.name]));
       },
       onAddToList: (target: SongItem): void => {
-        void this.addSearchRowToDefaultList(target);
+        void this.addSearchRowToList(target);
       },
       onDownload: (target: SongItem): void => {
         void this.downloadSearchRow(target);
@@ -881,11 +882,14 @@ export struct HomePage {
     });
   }
 
-  /** 收藏到默认歌单（我喜欢） */
-  private async addSearchRowToDefaultList(row: SongItem): Promise<void> {
-    const error: string = await addRowToDefaultList(row);
-    appToast(error.length === 0
-      ? tf('toast_added_to_default', [row.name]) : t('toast_operation_failed'));
+  /** 加入歌单（面板里选目标 / 新建） */
+  private async addSearchRowToList(row: SongItem): Promise<void> {
+    const result: AddToListOutcome = await addRowToList(row);
+    if (result.cancelled) {
+      return;
+    }
+    appToast(result.error.length === 0
+      ? tf('toast_added_quoted', [result.listName]) : t('toast_operation_failed'));
   }
 
   /** 下载单曲 */

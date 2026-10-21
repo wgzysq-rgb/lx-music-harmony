@@ -24,6 +24,15 @@ export struct MenuSheet {
   /** 确认框的说明文字（菜单为空） */
   @Prop message: string = '';
   @Prop rows: SheetRow[] = [];
+  /**
+   * 关闭由外部宿主（SheetHost）统一负责时不写 visible。
+   *
+   * 原因：面板切换时本组件会被卸载，bindSheet 随节点销毁会补发一次 onDisappear；
+   * 此时父组件正在渲染，往 @Link visible 里写状态会触发框架报错
+   * （State variable has changed during render），回调也会被宿主的代号校验拦掉。
+   * 页面直接使用时保持 false，行为不变。
+   */
+  @Prop hostControlled: boolean = false;
   onPick?: (index: number) => void;
   onCancel?: () => void;
 
@@ -38,10 +47,24 @@ export struct MenuSheet {
 
 
   private cancel(): void {
+    if (this.hostControlled) {
+      // 宿主托管：visible 由 SheetHost.finish 统一收，这里只回传取消
+      if (this.onCancel) {
+        this.onCancel();
+      }
+      return;
+    }
     this.visible = dismissSheet(this.onCancel);
   }
 
-  /** 点某一行动作：禁用行忽略，其余回传原始下标 */
+  /**
+   * 点某一行动作：禁用行忽略，其余回传原始下标。
+   *
+   * 这里**不自己**把 visible 置 false：本组件只由 SheetHost 渲染，关闭由
+   * SheetHost.finish 统一负责（它会等一拍，好让调用方紧接着开的下一个面板
+   * 直接换内容，而不是被收起动画带走）。若在这里立刻关，
+   * 「动作菜单 → 添加到歌单 → 选歌单」这类两步面板会闪一下就没。
+   */
   private pick(row: SheetRow): void {
     if (row.disabled) {
       return;
@@ -49,7 +72,6 @@ export struct MenuSheet {
     if (this.onPick) {
       this.onPick(row.index);
     }
-    this.visible = false;
   }
 
   private rowColor(row: SheetRow): string {

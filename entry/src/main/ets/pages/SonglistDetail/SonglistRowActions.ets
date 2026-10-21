@@ -7,11 +7,12 @@
  */
 import { appLog as hilog } from '../../core/log/AppLogger';
 import { common } from '@kit.AbilityKit';
-import { addMusicToList, LIST_IDS, type MusicItem } from '../../service/ListService';
+import { addMusicToList, type MusicItem } from '../../service/ListService';
 import { songRowToListItem, songRowToMusicInfo } from '../../core/list/SongMappers';
 import { dislikeList } from '../../core/dislike/DislikeList';
 import { buildShareText, getMusicDetailPageUrl } from '../../core/music/MusicDetailUrl';
 import { shareText, type ShareResult } from '../../service/ShareService';
+import { pickAddTarget, type AddTarget } from './SonglistTargetPicker';
 import { downloadOne } from './SonglistActions';
 import type { SongItem } from './SonglistTypes';
 
@@ -35,16 +36,45 @@ export async function shareSongRow(
   }
 }
 
-/** 加入「默认歌单」；返回空串表示成功，否则返回错误描述 */
-export async function addRowToDefaultList(song: SongItem): Promise<string> {
+/**
+ * 加入歌单的结果：区分「用户取消」「成功」「失败」三种结局
+ */
+export interface AddToListOutcome {
+  /** 用户在面板里取消 —— 调用方不提示、不落库 */
+  cancelled: boolean;
+  /** 目标歌单名（成功时有值，用于提示文案） */
+  listName: string;
+  /** 错误描述，空串表示成功 */
+  error: string;
+}
+
+/**
+ * 加入歌单：先让用户选目标（已有歌单 / 新建），再落库。
+ *
+ * 原先这里直接塞进「默认列表」且没有任何确认，用户既不知道加去了哪，
+ * 也找不到默认列表的入口。现在改为显式选择。
+ */
+export async function addRowToList(song: SongItem): Promise<AddToListOutcome> {
+  let target: AddTarget | null = null;
   try {
-    const item: MusicItem = songRowToListItem(song);
-    await addMusicToList(LIST_IDS.DEFAULT, item);
-    return '';
+    target = await pickAddTarget();
   } catch (err) {
     const message = err instanceof Error ? err.message : JSON.stringify(err);
-    hilog.error(DOMAIN, TAG, 'add to default list failed: %{public}s', message);
-    return message;
+    hilog.error(DOMAIN, TAG, 'pick add target failed: %{public}s', message);
+    return { cancelled: false, listName: '', error: message };
+  }
+  if (!target) {
+    return { cancelled: true, listName: '', error: '' };
+  }
+
+  try {
+    const item: MusicItem = songRowToListItem(song);
+    await addMusicToList(target.id, item);
+    return { cancelled: false, listName: target.name, error: '' };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : JSON.stringify(err);
+    hilog.error(DOMAIN, TAG, 'add to list failed: %{public}s', message);
+    return { cancelled: false, listName: target.name, error: message };
   }
 }
 

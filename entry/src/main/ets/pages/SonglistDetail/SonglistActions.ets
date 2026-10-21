@@ -7,9 +7,10 @@
  */
 import { appLog as hilog } from '../../core/log/AppLogger';
 import { t, tf } from '../../service/LocalizationService';
-import { addMusicToList, LIST_IDS, removeMusicsFromList } from '../../service/ListService';
+import { addMusicToList, removeMusicsFromList } from '../../service/ListService';
 import { download } from '../../core/music/MusicFeatureEntry';
 import { songRowToListItem, songRowToMusicInfo } from '../../core/list/SongMappers';
+import { pickAddTarget, type AddTarget } from './SonglistTargetPicker';
 import type { MusicInfo } from '../../types/MusicTypes';
 import type { SongItem } from './SonglistTypes';
 
@@ -28,22 +29,29 @@ export interface SonglistTarget {
   name: string;
 }
 
-/** 批量加入默认列表，返回成功条数 */
-export async function batchAddToDefaultList(songs: SongItem[], toast: ActionToast): Promise<number> {
+/**
+ * 批量加入歌单：先弹面板选目标（含新建），再逐首落库。
+ * 返回成功条数；用户取消返回 0 且不提示。
+ */
+export async function batchAddToList(songs: SongItem[], toast: ActionToast): Promise<number> {
   if (songs.length === 0) {
     toast(t('toast_no_selection'));
+    return 0;
+  }
+  const target: AddTarget | null = await pickAddTarget();
+  if (!target) {
     return 0;
   }
   let added = 0;
   for (let i = 0; i < songs.length; i++) {
     try {
-      await addMusicToList(LIST_IDS.DEFAULT, songRowToListItem(songs[i]));
+      await addMusicToList(target.id, songRowToListItem(songs[i]));
       added++;
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'batch add failed: %{public}s', JSON.stringify(err));
     }
   }
-  toast(tf('toast_batch_added', [added.toString()]));
+  toast(tf('toast_batch_added_to_list', [added.toString(), target.name]));
   return added;
 }
 

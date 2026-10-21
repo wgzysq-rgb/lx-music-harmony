@@ -34,7 +34,16 @@ export interface SheetRow {
   index: number;
 }
 
-export type SheetKind = 'select' | 'input' | 'menu' | 'confirm';
+/**
+ * 选歌单面板的「新建」返回值前缀。
+ *
+ * 该面板把「列出歌单」和「输入新名字」放在同一个浮层里切换（不换窗口），
+ * 所以新建意图也用返回值表达：`new:<用户输入的名字>`。
+ * 歌单 id 只有 default / love / user_xxx 三种形态，不会与这个前缀冲突。
+ */
+export const NEW_TARGET_PREFIX: string = 'new:';
+
+export type SheetKind = 'select' | 'input' | 'menu' | 'confirm' | 'addToTarget';
 
 /** 一次面板请求（宿主据此渲染） */
 export interface SheetRequest {
@@ -73,6 +82,20 @@ class SheetServiceImpl {
     title: string, value: string, placeholder: string = '', numberOnly: boolean = false
   ): Promise<string> {
     return this.request('input', title, [], value, placeholder, numberOnly);
+  }
+
+  /**
+   * 选歌单面板：列出已有歌单，末尾一项「新建歌单」。
+   *
+   * 与其他面板的关键差别：它渲染成**自绘浮层**而不是 bindSheet。
+   * 原因见 components/ui/AddToTargetSheet —— 这个面板几乎总是紧跟在动作菜单之后出现，
+   * 而两个 bindSheet 连续开关时，后一个会被前一个的收起动画吞掉（实测闪一下就没）。
+   * 自绘浮层挂在页面顶层 Stack，不存在窗口切换，也就没有这个问题。
+   *
+   * @returns 选中的歌单 id；新建返回 `new:<名字>`；取消返回空串
+   */
+  addToTarget(title: string, options: SheetOption[]): Promise<string> {
+    return this.request('addToTarget', title, options, '', '', false);
   }
 
   /** 动作菜单：返回被点行的原始下标，取消返回 -1 */
