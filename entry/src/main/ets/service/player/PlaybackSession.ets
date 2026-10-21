@@ -34,7 +34,21 @@ export interface PlaybackSessionHost {
   setPlayMode: (mode: PlayMode) => void;
   cyclePlayMode: () => PlayMode;
   getCurrentSong: () => SongInfo | null;
+
+  // ---- 车机侧需要的额外能力（手机播控不下发，缺失时对应命令静默忽略）----
+  /** 当前播放位置（秒）：快进/快退要基于它算目标位置 */
+  getPositionSeconds?: () => number;
+  /** 设置倍速（车机中控/语音助手）；走 setPlaybackRate 会一并持久化偏好 */
+  setSpeed?: (rate: number) => void;
+  /**
+   * 按 assetId 起播（车机语音点播）。
+   * @returns 是否在播放队列里找到了目标
+   */
+  playByAssetId?: (assetId: string) => Promise<boolean>;
 }
+
+/** 车机下发快进/快退但没带步长时用的默认值（秒） */
+const DEFAULT_SEEK_STEP_SECONDS: number = 15;
 
 /** 应用播放模式 → 系统循环模式 */
 export function playModeToAvLoopMode(mode: PlayMode): avSession.LoopMode {
@@ -104,6 +118,19 @@ export function createAvSessionCallbacks(host: PlaybackSessionHost): AvSessionCa
   const handleErr = (action: string, err: Error): void => {
     hilog.error(DOMAIN, TAG, 'AVSession %{public}s failed: %{public}s', action, err.message || 'unknown');
   };
+  /** 按步长相对跳转（direction: +1 快进 / -1 快退） */
+  const seekStep = (direction: number, deltaMs?: number): void => {
+    const readPosition = host.getPositionSeconds;
+    if (!readPosition) {
+      hilog.info(DOMAIN, TAG, 'seek step ignored: host reports no position');
+      return;
+    }
+    const stepSeconds: number = (deltaMs !== undefined && deltaMs > 0)
+      ? deltaMs / 1000
+      : DEFAULT_SEEK_STEP_SECONDS;
+    const target: number = readPosition() + direction * stepSeconds;
+    host.seekTo(Math.max(0, target)).catch((err: Error) => handleErr('seek step', err));
+  };
   return {
     onPlay: (): void => {
       host.play().catch((err: Error) => handleErr('play', err));
@@ -154,6 +181,40 @@ export function createAvSessionCallbacks(host: PlaybackSessionHost): AvSessionCa
           currentSong.title, isLoved ? 'loved' : 'unloved');
       }).catch((err: Error): void => {
         hilog.error(DOMAIN, TAG, 'Toggle favorite failed: %{public}s', err.message);
+      });
+    },
+
+    // ---- 车机侧命令 ----
+    onSetSpeed: (speed: number): void => {
+      const apply = host.setSpeed;
+      if (!apply) {
+        hilog.info(DOMAIN, TAG, 'setSpeed %{public}s ignored: host has no setter', String(speed));
+        return;
+      }
+      try {
+        apply(speed);
+      } catch (err) {
+        handleErr('setSpeed', err as Error);
+      }
+    },
+    onFastForward: (deltaMs?: number): void => {
+      seekStep(1, deltaMs);
+    },
+    onRewind: (deltaMs?: number): void => {
+      seekStep(-1, deltaMs);
+    },
+    onPlayWithAssetId: (assetId: string): void => {
+      const resolve = host.playByAssetId;
+      if (!resolve) {
+        hilog.info(DOMAIN, TAG, 'playWithAssetId ignored: host has no resolver (assetId=%{public}s)',
+          assetId);
+        return;
+      }
+      resolve(assetId).then((found: boolean): void => {
+        hilog.info(DOMAIN, TAG, 'playWithAssetId %{public}s -> %{public}s',
+          assetId, found ? 'playing' : 'not found');
+      }).catch((err: Error) => {
+        handleErr('playWithAssetId', err);
       });
     },
   };

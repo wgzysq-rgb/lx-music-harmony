@@ -33,4 +33,22 @@ export interface AvSessionCallbacks {
   onSeek: (positionMs: number) => void;
   onSetLoopMode: (loopMode: avSession.LoopMode) => void;
   onToggleFavorite: (assetId: string) => void;
+
+  // ---- 以下为车机/耳机侧常用、手机播控不一定会下发的命令（可选实现）----
+  /**
+   * 设定倍速（车机中控、语音助手）。
+   * 与手机播控的「循环模式」不同，倍速是绝对值，直接应用即可。
+   */
+  onSetSpeed?: (speed: number) => void;
+  /**
+   * 快进。参数是「快进多少毫秒」，车机/耳机可能不传（此时按 App 自己的步长）。
+   */
+  onFastForward?: (deltaMs?: number) => void;
+  /** 快退，语义同 onFastForward */
+  onRewind?: (deltaMs?: number) => void;
+  /**
+   * 指定资产起播（车机语音「播放某首歌」走这里）。
+   * assetId 即 setAVMetadata 时下发的那个 id。
+   */
+  onPlayWithAssetId?: (assetId: string) => void;
 }

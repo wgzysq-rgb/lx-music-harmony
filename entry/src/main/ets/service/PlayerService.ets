@@ -26,6 +26,7 @@ import type { MusicInfo, MusicSource, Quality } from '../types/MusicTypes';
 import { formatPlayTime } from '../utils/CommonUtils';
 import { recordPlayedSong } from './PlayHistoryService';
 import { backgroundRunningManager, type AvMediaMetadata, type AvSessionCallbacks } from './BackgroundRunningManager';
+import { carModeService } from './CarModeService';
 import { getMusicUrl, getPicPath } from '../core/music/MusicFeatureEntry';
 import { orderedEnabledSources, toBuiltinSourceId } from '../core/music/SourcePolicy';
 import { resolveCrossSource } from '../core/music/CrossSourceResolver';
@@ -244,6 +245,8 @@ export class PlayerService {
     backgroundRunningManager.setLoopMode(playModeToAvLoopMode(this.playMode));
     // 播控封面 / 蓝牙歌词开关（改变后立即用缓存元数据重放，不必等到下一首）
     backgroundRunningManager.setMetadataOptions(settings.showNotificationImage, settings.showBluetoothLyric);
+    // 车机模式：设置加载与每次设置变更都会经过这里，车机连接状态由 CarModeService 自行订阅
+    carModeService.applySetting(settings.carMode);
 
     // 音量跟随设置（0-100 -> 0-1），设置被恢复/同步后也能立即生效
     const targetVolume = settings.volume / 100;
@@ -278,7 +281,42 @@ export class PlayerService {
       setPlayMode: (mode: PlayMode): void => this.setPlayMode(mode),
       cyclePlayMode: (): PlayMode => this.cyclePlayMode(),
       getCurrentSong: (): SongInfo | null => this.getCurrentSong(),
+      // 车机侧：位置用于快进/快退，倍速与语音点播各自落到播放器对应入口
+      getPositionSeconds: (): number => playerStateData.progress.nowPlayTime,
+      setSpeed: (rate: number): void => {
+        this.setPlaybackRate(rate).catch((err: Error) => {
+          hilog.warn(DOMAIN, TAG, 'apply AVSession speed failed: %{public}s', err.message);
+        });
+      },
+      playByAssetId: (assetId: string): Promise<boolean> => this.playByAssetId(assetId),
     });
+  }
+
+  /**
+   * 按 assetId 起播（车机语音点播）。
+   *
+   * assetId 就是 setAVMetadata 下发时用的那个 id（musicInfo.id，缺省回落到 songmid）。
+   * 只在本机播放队列里找：队列外的结果来源不确定，悄悄插一首用户没选过的歌
+   * 比「找不到」更让人困惑，所以找不到就如实返回 false。
+   */
+  async playByAssetId(assetId: string): Promise<boolean> {
+    if (assetId.length === 0) {
+      return false;
+    }
+    const current = this.getCurrentSong();
+    if (current && (current.id === assetId || current.songmid === assetId)) {
+      await this.play();
+      return true;
+    }
+    for (let i = 0; i < this.playList.length; i++) {
+      const song = this.playList[i];
+      if (song.id === assetId || song.songmid === assetId) {
+        await this.playSongByIndex(i);
+        return true;
+      }
+    }
+    hilog.info(DOMAIN, TAG, 'playByAssetId: %{public}s not found in queue', assetId);
+    return false;
   }
 
   /** 保存播放模式 */

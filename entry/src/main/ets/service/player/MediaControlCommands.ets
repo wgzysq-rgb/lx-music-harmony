@@ -117,5 +117,64 @@ export function registerMediaControlCommands(
     });
   });
 
+  // ---- 车机 / 耳机侧命令 ----
+  // 手机播控中心基本不下发这几条，但 HiCar 车机的方向盘、中控与语音助手会。
+  // 不注册的表现就是「车机上按了没反应」，而手机侧一切正常，很难从现场反馈定位。
+  // 全部走 safeRegister：低版本设备没有对应接口时只跳过这一条，不影响已有控制。
+
+  safeRegister('setSpeed', (): void => {
+    session.on('setSpeed', (speed: number): void => {
+      hilog.info(DOMAIN, TAG, 'AVSession command: setSpeed %{public}s', String(speed));
+      safeInvoke('SetSpeed', (): void => {
+        if (callbacks && callbacks.onSetSpeed) {
+          callbacks.onSetSpeed(speed);
+        }
+      });
+    });
+  });
+  safeRegister('fastForward', (): void => {
+    session.on('fastForward', (time?: number): void => {
+      hilog.info(DOMAIN, TAG, 'AVSession command: fastForward %{public}s',
+        time === undefined ? 'default' : String(time));
+      safeInvoke('FastForward', (): void => {
+        if (callbacks && callbacks.onFastForward) {
+          callbacks.onFastForward(time);
+        }
+      });
+    });
+  });
+  safeRegister('rewind', (): void => {
+    session.on('rewind', (time?: number): void => {
+      hilog.info(DOMAIN, TAG, 'AVSession command: rewind %{public}s',
+        time === undefined ? 'default' : String(time));
+      safeInvoke('Rewind', (): void => {
+        if (callbacks && callbacks.onRewind) {
+          callbacks.onRewind(time);
+        }
+      });
+    });
+  });
+  safeRegister('setTargetLoopMode', (): void => {
+    session.on('setTargetLoopMode', (loopMode: avSession.LoopMode): void => {
+      hilog.info(DOMAIN, TAG, 'AVSession command: setTargetLoopMode %{public}d', loopMode);
+      safeInvoke('SetTargetLoopMode', (): void => {
+        // 语义与 setLoopMode 相同（都是「切到这个模式」），复用同一处理
+        if (callbacks) {
+          callbacks.onSetLoopMode(loopMode);
+        }
+      });
+    });
+  });
+  safeRegister('playWithAssetId', (): void => {
+    session.on('playWithAssetId', (assetId: string): void => {
+      hilog.info(DOMAIN, TAG, 'AVSession command: playWithAssetId %{public}s', assetId);
+      safeInvoke('PlayWithAssetId', (): void => {
+        if (callbacks && callbacks.onPlayWithAssetId) {
+          callbacks.onPlayWithAssetId(assetId);
+        }
+      });
+    });
+  });
+
   hilog.info(DOMAIN, TAG, 'All control commands registered');
 }
