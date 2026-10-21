@@ -578,4 +578,35 @@ export class DesignTokens {
   static textShadowOnArtwork(): ShadowOptions {
     return { radius: 8, color: 'rgba(0,0,0,0.55)', offsetX: 0, offsetY: 0 };
   }
+
+  // ==================== 车机（HiCar）界面色板 ====================
+  //
+  // 车机界面**不跟随手机主题**：车内常是暗光环境，白天开灯的屏幕也更需要
+  // 深底高对比，所以这里是一套固定的深色。单独成组而不是复用上面的
+  // pageBg/labelPrimary，是为了避免以后有人"顺手"让车机界面跟随浅色主题。
+
+  /** 车机界面底色 */
+  static carBg(): string {
+    return '#0A0B0F';
+  }
+
+  /** 车机界面上的卡片/按钮底（极轻的白色叠加） */
+  static carSurface(): string {
+    return 'rgba(255,255,255,0.08)';
+  }
+
+  /** 车机界面上的主要文字 */
+  static carLabelPrimary(): string {
+    return '#FFFFFF';
+  }
+
+  /** 车机界面上的次要文字（歌手、时间） */
+  static carLabelSecondary(): string {
+    return 'rgba(255,255,255,0.72)';
+  }
+
+  /** 车机界面上的弱化文字（提示、下一句歌词） */
+  static carLabelTertiary(): string {
+    return 'rgba(255,255,255,0.42)';
+  }
 }

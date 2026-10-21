@@ -355,6 +355,9 @@ export function buildEnUS(): Map<string, string> {
   m.set('settings_car_mode_off', 'Off');
   m.set('settings_car_mode_connected', 'Car connected');
   m.set('settings_car_mode_disconnected', 'No car detected');
+  m.set('car_now_playing', 'Now playing');
+  m.set('car_exit', 'Exit car view');
+  m.set('car_no_track', 'Nothing playing');
   m.set('settings_auto_match_local_lyric', 'Online Match for Local Music');
   m.set('settings_auto_match_local_lyric_desc', 'Automatically match lyrics and covers when playing local tracks (once per track; correctable in Local Music)');
   m.set('settings_sleep_wait_track', 'Stop After Current Song');

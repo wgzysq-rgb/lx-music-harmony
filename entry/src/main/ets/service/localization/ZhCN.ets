@@ -358,6 +358,9 @@ export function buildZhCN(): Map<string, string> {
   m.set('settings_car_mode_off', '关闭');
   m.set('settings_car_mode_connected', '已连接车机');
   m.set('settings_car_mode_disconnected', '未检测到车机');
+  m.set('car_now_playing', '正在播放');
+  m.set('car_exit', '退出车机界面');
+  m.set('car_no_track', '未在播放');
   m.set('settings_auto_match_local_lyric', '本地音乐在线匹配');
   m.set('settings_auto_match_local_lyric_desc', '播放本地音乐时自动在线匹配歌词与封面（每首只搜一次，可在本地音乐页手动纠正）');
   m.set('settings_sleep_wait_track', '播完当前歌曲再退出');

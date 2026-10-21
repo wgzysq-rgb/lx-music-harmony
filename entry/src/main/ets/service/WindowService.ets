@@ -265,7 +265,16 @@ export async function applyThemeToWindow(): Promise<void> {
     let statusBarContentColor = '#000000';
     let navigationBarContentColor = '#000000';
     
-    if (activeTheme) {
+    const carUiVisible: boolean = AppStorage.get<boolean>('carUiVisible') === true;
+    if (carUiVisible) {
+      // 车机界面在屏：固定深色，不跟随手机主题。
+      // 这里必须由窗口服务统一判断——页面里自己染一次没用，因为本函数
+      // 会在 initWindowService / onThemeChange 里带延时再次执行，把页面染好的覆盖掉。
+      backgroundColor = DesignTokens.carBg();
+      systemBarColor = DesignTokens.carBg();
+      statusBarContentColor = '#FFFFFF';
+      navigationBarContentColor = '#FFFFFF';
+    } else if (activeTheme) {
       // 判断是否为深色主题
       const isDark = activeTheme.get('c-000') === 'rgb(0,0,0)' || 
                     activeTheme.get('c-000') === 'rgba(0,0,0,1)';
@@ -342,7 +351,9 @@ export async function applyThemeToWindow(): Promise<void> {
 
     const applySystemBarsOnce = async (): Promise<void> => {
       try {
-        await mainWindow!.setWindowSystemBarEnable(['status', 'navigation']);
+        // 车机界面是整屏场景，先请求隐藏；部分平板会返回成功却不真的隐藏，
+        // 所以下面仍会把系统栏染成车机底色兜底
+        await mainWindow!.setWindowSystemBarEnable(carUiVisible ? [] : ['status', 'navigation']);
       } catch (enErr) {
         hilog.info(DOMAIN, TAG, 'setWindowSystemBarEnable: %{public}s', JSON.stringify(enErr));
       }

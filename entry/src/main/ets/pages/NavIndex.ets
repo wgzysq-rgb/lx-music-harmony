@@ -8,6 +8,7 @@ import { CustomSourceView } from './Home/CustomSourceView';
 import { BoardDetailPage } from './BoardDetailPage';
 import { SonglistDetailPage } from './SonglistDetailPage';
 import { PlayDetailPage } from './PlayDetailPage';
+import { CarPage } from './CarPage';
 import { SettingView } from './Home/SettingView';
 import { SettingsCategoryPage } from './Home/Setting/SettingsCategoryPage';
 import { navigationService, RouteName } from '../service/NavigationService';
@@ -40,6 +41,22 @@ export struct NavIndex {
   private sourceSwitchedUnsub: (() => void) | null = null;
   /** 首次启动未同意许可协议时全屏拦截 */
   @State showPact: boolean = false;
+  /** 车机模式：连上车机（或设置里强制开启）时整窗切到驾驶界面 */
+  @StorageProp('carMode') @Watch('onCarModeChanged') carMode: boolean = false;
+  /**
+   * 用户主动退出车机界面后的临时抑制。
+   * 只在本进程内有效：重新连上车机、或重新开启车机模式时会复位，
+   * 否则用户退出一次之后就再也回不到车机界面了。
+   */
+  @State carUiSuppressed: boolean = false;
+
+  /** 车机模式重新生效时解除「用户已退出车机界面」的抑制 */
+  private onCarModeChanged(): void {
+    hilog.info(0x0001, 'NavIndex', 'carMode=%{public}s', String(this.carMode));
+    if (this.carMode) {
+      this.carUiSuppressed = false;
+    }
+  }
 
   aboutToAppear() {
     // 将 NavPathStack 注入到 NavigationService
@@ -123,17 +140,28 @@ export struct NavIndex {
 
   build() {
     Stack() {
-      Navigation(this.navPathStack) {
-        HomePage()
-      }
-      .hideTitleBar(true)
-      // 必须 Stack：默认 Auto 在宽屏（平板/PC）会自动分栏，首页被塞进左侧 240vp 导航栏、
-      // 右侧空着等子页面。宽屏形态由首页自己画（侧栏 + 内容），子页面一律整窗压栈
-      .mode(NavigationMode.Stack)
-      .navDestination(this.buildRouteMap)
+      if (this.carMode && !this.carUiSuppressed) {
+        // 车机场景整窗接管：车机上"首页 + 迷你条 + 播放页"那套层级没有意义，
+        // 只留一屏现在在唱什么 + 大按钮。
+        CarPage({
+          onExit: (): void => {
+            hilog.info(0x0001, 'NavIndex', 'user exited car UI');
+            this.carUiSuppressed = true;
+          },
+        })
+      } else {
+        Navigation(this.navPathStack) {
+          HomePage()
+        }
+        .hideTitleBar(true)
+        // 必须 Stack：默认 Auto 在宽屏（平板/PC）会自动分栏，首页被塞进左侧 240vp 导航栏、
+        // 右侧空着等子页面。宽屏形态由首页自己画（侧栏 + 内容），子页面一律整窗压栈
+        .mode(NavigationMode.Stack)
+        .navDestination(this.buildRouteMap)
 
-      // 全局面板宿主：命令式面板（设置项选择/输入等）统一挂在这里，避免被 Scroll 裁剪
-      SheetHost()
+        // 全局面板宿主：命令式面板（设置项选择/输入等）统一挂在这里，避免被 Scroll 裁剪
+        SheetHost()
+      }
 
       // 首次启动：未同意许可协议前全屏拦截（对齐安卓版 PactModal）
       if (this.showPact) {
