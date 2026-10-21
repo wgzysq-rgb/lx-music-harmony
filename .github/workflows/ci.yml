@@ -7,7 +7,11 @@ name: 自检
 # 注意：本仓库的仓库根就是鸿蒙工程根（hvigor.sh / entry / oh-package.json5 都在根目录），
 # 所以这里不要设置 working-directory。
 on:
+  # 只跟分支：打 tag 时由 build-hap.yml 负责（它自己也跑一遍 check.sh），
+  # 免得同一个提交上跑两遍自检。
   push:
+    branches:
+      - '**'
   pull_request:
   workflow_dispatch:
 

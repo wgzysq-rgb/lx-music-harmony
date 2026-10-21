@@ -91,43 +91,34 @@ SKIP_CHECKS=1 git commit … # 紧急时跳过钩子
 
 ### CI（GitHub Actions）
 
-两个工作流分工明确，原因是**鸿蒙 SDK 装不到 GitHub 托管 runner 上**：本工程要用 DevEco 自带的
-SDK 与 hvigor，部分能力（如 `@kit.LiveViewKit`）只存在于 DevEco 的 SDK；官方命令行工具需要
-华为账号接受许可。所以：
+两个工作流都跑在 **GitHub 托管 runner** 上，不需要自托管机器：
 
 | 工作流 | 跑在哪 | 做什么 |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | GitHub 托管 runner（ubuntu） | 只跑 `./scripts/check.sh`（纯 Python，不需要 SDK），push / PR 都能拿到分钟级反馈 |
-| `.github/workflows/build-hap.yml` | **self-hosted runner**（装了 DevEco 的机器） | 自检 + `assembleHap`（release）+ 上传 HAP 产物，手工触发 |
+| `.github/workflows/ci.yml` | ubuntu | 只跑 `./scripts/check.sh`（纯 Python，不需要 SDK），push / PR 分钟级反馈 |
+| `.github/workflows/build-hap.yml` | ubuntu | 装鸿蒙命令行工具链 → 自检 → `assembleHap` → 出**未签名** HAP → 挂 Release |
 
-启用出包工作流需要两步（一次性）：
+出包之所以能在托管 runner 上跑通：用 [`ErBWs/setup-ohos`](https://github.com/ErBWs/setup-ohos)
+拉官方 HarmonyOS **命令行工具链**（含 SDK、hvigor、ohpm、NDK），它是无界面的，正好适合 CI。
+SDK 版本由 `build-hap.yml` 顶部的 `OHOS_CLI_VERSION` 指定，须与 `build-profile.json5` 的
+`compatibleSdkVersion` 对齐（当前 `26.0.0`）。
 
-1. 在仓库 `Settings → Actions → Runners → New self-hosted runner` 按提示在目标机器上注册一个
-   runner（macOS 机器上已装 DevEco 即可）。
-2. 在 `Settings → Secrets and variables → Actions` 新建 **Secret** **`SIGNING_DIR`**，
-   指向签名材料目录：里面放 `build-profile.local.json5`（从 DevEco 导出的发布签名配置）
-   和 `.p12` / `.p7b` / `.cer` 三个文件。注入时由 `scripts/inject_signing.py` 把配置里
-   `storeFile` / `profile` / `certpath` 的相对路径解析成该目录下的绝对路径，
-   所以工作流不依赖任何特定的目录结构。不想打签名包时，触发时把 `signed` 取消勾选即可。
-
-   这里**必须是 Secret 而不是 Variable**：Variable 不做脱敏，值会明文出现在执行日志里
-   （公开仓库的运行日志人人可读），而 Secret 会以 `***` 显示。
-
-触发时还可选填 `release_tag`（如 `v1.0.0`）：填了会把打好的 HAP 发到同名 GitHub Release，
-留空则只作为 Actions artifact 保留 14 天。
+产物是 `entry-default-unsigned.hap`：仓库里 `signingConfigs` 留空，工作流不签名，
+**不需要把任何证书/口令放进仓库**。要签名包请在本地用 DevEco Studio 配好自己的证书再构建
+（`scripts/inject_signing.py` 可选，用于把本机签名配置临时注入 `build-profile.json5`）。
 
 两点说明：
 
 - `workflow_dispatch` 要求工作流定义出现在**默认分支**上，否则 Actions 里既没有
   「Run workflow」按钮、API 也会 404。所以请保持默认分支上也有一份最新的
   `.github/workflows/*`（fork 后自建 CI 的人同样会遇到这条规则）。
-- 自托管 runner 出一份 release HAP 约 **2 分钟**（含自检）。runner 没开机时任务只会排队。
+- 一次出包约 **3–6 分钟**，其中工具链下载 1–3 分钟（开了 SDK 缓存后更快）。
 
 两点注意：
 
-- **self-hosted runner 需要能跑 DevEco**：出包机器要装 DevEco Studio（`hvigor.sh` 默认用
-  `/Applications/DevEco-Studio.app` 下的 Node 与 hvigor，可用 `DEVECO_NODE`/`DEVECO_HVIGORW`
-  覆盖），并预先装好工程依赖（`oh_modules` 由构建自动拉取）。runner 离线时任务只会排队。
+- **升级 SDK 时只改 `OHOS_CLI_VERSION`**：可选值见
+  [ErBWs/ohos-sdk releases](https://github.com/ErBWs/ohos-sdk/releases)。
+  换版本后记得清一次 Actions 缓存（key 里带版本号，通常自动失效）。
 - **改工作流文件需要带 `workflow` scope 的 token**：`repo` scope 的 PAT 推送包含
   `.github/workflows/` 的提交会被 GitHub 拒绝（fork 后自行改 CI 的人同样会遇到）。
 
@@ -142,14 +133,14 @@ SDK 与 hvigor，部分能力（如 `@kit.LiveViewKit`）只存在于 DevEco 的
 ./scripts/release_tag.sh
 ```
 
-- 附件命名 `lx-music-harmony-<tag>-signed.hap` / `-unsigned.hap`，Release 正文由
-  `.github/RELEASE_NOTES.md`（安装说明）+ GitHub 自动生成的提交清单组成；
+- 附件名 `lx-music-harmony-<tag>-unsigned.hap`，Release 正文由
+  `.github/RELEASE_NOTES.md`（改了什么 + 安装说明）+ GitHub 自动生成的提交清单组成；
 - 发布逻辑在 `scripts/publish_release.py`（标准库实现，不依赖 `gh`）。**重跑不会把说明
   叠两遍，同名附件会被替换**，所以补发/重发是安全的；
 - 不想发版只想要产物：Actions → 打包 HAP → Run workflow，`release_tag` 留空即可。
-- **（可选）在 Gitee 也镜像一份**：同一个标签可以在 Gitee 的「发行版」里挂同样的两个
-  HAP，国内下载通常比 GitHub 快。Gitee 只做镜像、不承担构建——它的托管构建同样没有
-  DevEco/鸿蒙 SDK，出包永远发生在 GitHub Actions 这边。仓库方没开这个开关时这一步
+- **（可选）在 Gitee 也镜像一份**：同一个标签可以在 Gitee 的「发行版」里挂同样的 HAP，
+  国内下载通常比 GitHub 快。Gitee 只做镜像、不承担构建——它的托管构建同样没有
+  鸿蒙 SDK，出包永远发生在 GitHub Actions 这边。仓库方没开这个开关时这一步
   会自动跳过；启用方式见下。
 
 #### 让 Gitee 也自动挂包（一次性）

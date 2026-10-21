@@ -1,24 +1,23 @@
 name: 打包 HAP
 
-# 为什么用 self-hosted runner：
-# 鸿蒙出包要用 DevEco Studio 自带的 SDK 与 hvigor，本工程还用到只随 DevEco SDK 分发的
-# HMS 套件（`@kit.LiveViewKit` 等）；官方命令行工具需要华为账号交互式接受许可。
-# 这类环境装不到 GitHub 托管的 runner 上，所以出包交给一台装了 DevEco 的自托管机器。
+# 出包完全跑在 GitHub 托管 runner 上，不需要自托管机器。
 #
-# 触发方式（自托管 runner 不接 PR / fork，所以只挂这两种）：
-#   1) 打标签：push 一个 `v*` 标签 → 出包 + 发布到同名 Release（见 scripts/release_tag.sh）
-#   2) 手工：Actions → 打包 HAP → Run workflow（只出 artifact，或指定 release_tag 发 Release）
+# 之所以能这么做：用 ErBWs/setup-ohos 拉官方 HarmonyOS 命令行工具链（含 SDK、hvigor、
+# ohpm、NDK），这些都是无界面的，正好适合 CI。仓库里 build-profile.json5 的
+# signingConfigs 留空，因此产物是 entry-default-unsigned.hap —— 未签名包，谁下载谁
+# 用自己的证书签名后安装，不需要把任何证书/口令放进仓库。
 #
-# 说明：`workflow_dispatch` 要求工作流定义出现在默认分支上，请保持默认分支的副本同步。
+# 触发方式：
+#   1) 推 `v*` 标签 → 出包 + 挂到同名 Release（见 README「发版本」）
+#   2) 手工：Actions → 打包 HAP → Run workflow（只出 artifact；填 release_tag 才发 Release）
+#
+# 注意：`workflow_dispatch` 要求本文件出现在默认分支上，否则 Actions 里没有按钮。
+
 on:
   workflow_dispatch:
     inputs:
-      signed:
-        description: '打签名包（需 Secret SIGNING_DIR 指向签名材料目录）'
-        type: boolean
-        default: true
       release_tag:
-        description: '（可选）发布到 Release，填版本号如 v1.0.0；留空只上传 artifact'
+        description: '（可选）发布到 Release，填版本号如 v1.5.0；留空只上传 artifact'
         type: string
         required: false
         default: ''
@@ -29,70 +28,73 @@ on:
 permissions:
   contents: write
 
+env:
+  # 与 build-profile.json5 的 compatibleSdkVersion（26.0.0）对齐。
+  # 升级 SDK 时改这一处；可选值见 https://github.com/ErBWs/ohos-sdk/releases
+  OHOS_CLI_VERSION: '26.0.0.821'
+
 jobs:
   build:
-    runs-on: [self-hosted, macOS]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # 标签推送 = 发布版本（默认签名）；手工触发 = 用输入决定
-      - name: 解析构建参数
-        id: params
-        run: |
-          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
-            TAG="${GITHUB_REF_NAME}"
-            SIGNED=true
-          else
-            TAG="${{ inputs.release_tag }}"
-            SIGNED="${{ inputs.signed }}"
-          fi
-          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
-          echo "signed=${SIGNED}" >> "${GITHUB_OUTPUT}"
-          echo "触发=${GITHUB_EVENT_NAME} 发布标签=[${TAG}] 签名=[${SIGNED}]"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
-      # 仓库里的 build-profile.json5 是脱敏版；这里把签名机上那份真实配置注入进来，
-      # 相对路径统一解析到 SIGNING_DIR 下（见 scripts/inject_signing.py），
-      # 因此工作流不需要假设机器上有任何特定目录结构。
-      - name: 注入本机签名
-        if: steps.params.outputs.signed == 'true'
-        env:
-          # 用 Secret 而不是 Variable：Variable 不会被脱敏，值（本机绝对路径）会明文
-          # 打印在执行日志里，而公开仓库的日志人人可读。
-          SIGNING_DIR: ${{ secrets.SIGNING_DIR }}
+      # 下载并安装 HarmonyOS 命令行工具链。cache 打开后重复构建省掉几 GB 下载。
+      - name: 安装鸿蒙工具链
+        id: ohos
+        uses: ErBWs/setup-ohos@v2
+        with:
+          version: ${{ env.OHOS_CLI_VERSION }}
+          cache: 'true'
+
+      # 把 SDK 路径统一到 hvigor 认的环境变量名，并打印一次环境，
+      # 将来构建因为没有 SDK / 缺 HMS 套件而失败时，日志里能直接看出来。
+      - name: 配置构建环境
         run: |
           set -euo pipefail
-          if [ -z "${SIGNING_DIR}" ]; then
-            echo "::error::未配置仓库变量 SIGNING_DIR（指向签名材料目录）"
+          echo "DEVECO_SDK_HOME=${HOS_SDK_HOME}" >> "${GITHUB_ENV}"
+          echo "node  $(node -v)"
+          echo "hvigor $(hvigorw -v 2>&1 | tail -1)"
+          echo "ohpm  $(ohpm -v 2>&1 | tail -1)"
+          echo "--- sdk/default ---"
+          ls "${HOS_SDK_HOME}/default"
+          # HMS 套件（@kit.LiveViewKit、@kit.CarKit）只随 HarmonyOS SDK 分发，
+          # 不在 OpenHarmony SDK 里；没有这个目录说明装错了包，编译必然失败。
+          if [ ! -d "${HOS_SDK_HOME}/default/hms" ]; then
+            echo "::error::SDK 缺少 hms 目录（@kit.LiveViewKit / @kit.CarKit 需要）"
             exit 1
           fi
-          if [ ! -f "${SIGNING_DIR}/build-profile.local.json5" ]; then
-            echo "::error::${SIGNING_DIR} 下找不到 build-profile.local.json5"
-            exit 1
-          fi
-          python3 scripts/inject_signing.py --signing-dir "${SIGNING_DIR}" > build-profile.json5
-          git update-index --skip-worktree -- build-profile.json5
-          echo "签名配置已注入（证书/口令来自 SIGNING_DIR，未写进仓库）"
 
       - name: 全量自检
         run: ./scripts/check.sh
 
-      - name: 打包（release 产品）
-        run: |
-          ./hvigor.sh assembleHap --mode module \
-            -p module=entry@default \
-            -p product=release \
-            -p buildMode=release
-          ls -la entry/build/release/outputs/default/*.hap
+      - name: 安装依赖
+        run: ohpm install --all
 
-      # 附件名要能一眼看出「哪个版本、签没签名」，所以重命名后再分发：
-      #   lx-music-harmony-v1.0.0-signed.hap / -unsigned.hap
+      - name: 打包（未签名）
+        run: |
+          set -euo pipefail
+          # signingConfigs 为空 → 产物是 *-unsigned.hap
+          hvigorw assembleHap --mode module \
+            -p product=default \
+            -p buildMode=release \
+            --no-daemon
+          echo "--- 产物 ---"
+          find entry/build -name '*.hap' -print
+
+      # 附件名要能一眼看出「哪个版本、签没签名」
+      #   lx-music-harmony-v1.5.0-unsigned.hap
       - name: 整理发布产物
         run: |
           set -euo pipefail
-          tag="${{ steps.params.outputs.tag }}"
+          tag="${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}"
           [ -n "${tag}" ] || tag="run${GITHUB_RUN_NUMBER}"
           mkdir -p dist
-          for hap in entry/build/release/outputs/default/*.hap; do
+          for hap in $(find entry/build -name '*.hap'); do
             base="$(basename "${hap}" .hap)"
             case "${base}" in
               *-signed) kind=signed ;;
@@ -112,31 +114,32 @@ jobs:
           retention-days: 14
 
       - name: 发布到 Release
-        if: steps.params.outputs.tag != ''
+        if: github.event_name == 'push' || inputs.release_tag != ''
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
         run: |
           python3 scripts/publish_release.py \
             --repo "${GITHUB_REPOSITORY}" \
-            --tag "${{ steps.params.outputs.tag }}" \
+            --tag "${TAG}" \
             --notes-file .github/RELEASE_NOTES.md \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             dist/*.hap
 
-      # Gitee 只做"镜像一份发行版 + 附件"（其托管构建同样没有鸿蒙 SDK）。
-      # 没配令牌就跳过，不影响发布。
+      # Gitee 只做「镜像一份发行版 + 附件」。没配令牌就跳过，不影响发布。
       - name: 同步到 Gitee 发行版
-        if: steps.params.outputs.tag != '' && vars.GITEE_REPO != ''
+        if: (github.event_name == 'push' || inputs.release_tag != '') && vars.GITEE_REPO != ''
         env:
           GITEE_TOKEN_FILE: ${{ secrets.GITEE_TOKEN_FILE }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
         run: |
           if [ -z "${GITEE_TOKEN_FILE}" ] || [ ! -f "${GITEE_TOKEN_FILE}" ]; then
-            echo "跳过 Gitee：未配置仓库变量 GITEE_TOKEN_FILE（Gitee 私人令牌文件路径）"
+            echo "跳过 Gitee：未配置 Secret GITEE_TOKEN_FILE（Gitee 私人令牌文件路径）"
             exit 0
           fi
           python3 scripts/publish_gitee_release.py \
             --repo "${{ vars.GITEE_REPO }}" \
-            --tag "${{ steps.params.outputs.tag }}" \
+            --tag "${TAG}" \
             --target "${GITHUB_SHA}" \
             --token-file "${GITEE_TOKEN_FILE}" \
             --notes-file .github/RELEASE_NOTES.md \
