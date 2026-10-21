@@ -140,7 +140,7 @@ export struct AboutView {
             .fontColor(DesignTokens.labelSecondary(this.theme))
             .margin({ bottom: 4 })
 
-          Text(t('about_version_value'))
+          Text(tf('about_version_value', [APP_VERSION]))
             .fontSize(DesignTokens.fontCaption())
             .fontColor(DesignTokens.labelSecondary(this.theme))
             .margin({ bottom: 16 })

@@ -2,6 +2,7 @@
  * 启动后异步检查远端版本信息，与 RN 端 src/core/version.ts 行为对齐（仅拉取并广播，不弹窗）。
  */
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { bundleManager } from '@kit.AbilityKit';
 import { stateEvent, type VersionInfo } from '../event/StateEvent';
 import { fetchUtf8Text } from './HttpRepository';
 
@@ -60,8 +61,27 @@ async function fetchAndEmitVersionInfo(): Promise<VersionInfo | null> {
   }
 }
 
-/** 当前应用版本（与 AppScope/app.json5 的 versionName 保持一致） */
-export const APP_VERSION = '1.0.0';
+/**
+ * 当前应用版本。
+ *
+ * 直接读安装包的 versionName（AppScope/app.json5 是唯一来源）。
+ * 以前这里写死 '1.0.0'，改版本号时容易忘了同步，关于页显示的版本
+ * 和实际安装的包对不上 —— 排查「到底测的是哪个包」时就很难受。
+ * 读不到时退回 '0.0.0'（不阻塞界面，只是版本比较会偏保守）。
+ */
+function readAppVersion(): string {
+  try {
+    const info = bundleManager.getBundleInfoForSelfSync(
+      bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT);
+    const name: string = info.versionName;
+    return name && name.length > 0 ? name : '0.0.0';
+  } catch (err) {
+    hilog.warn(DOMAIN, TAG, 'read versionName failed: %{public}s', JSON.stringify(err));
+    return '0.0.0';
+  }
+}
+
+export const APP_VERSION: string = readAppVersion();
 
 /**
  * 版本号比较：a > b 返回正数，相等返回 0，a < b 返回负数

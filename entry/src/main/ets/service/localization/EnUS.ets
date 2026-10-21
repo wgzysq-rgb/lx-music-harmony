@@ -489,7 +489,7 @@ export function buildEnUS(): Map<string, string> {
   m.set('view_full_chart', 'View full chart');
   m.set('play_tab_lyric', 'Lyrics');
   m.set('mylist_empty_hint', 'Tap “New” in the top right to create a playlist, or add songs from the player');
-  m.set('about_version_value', 'Version 1.0.0');
+  m.set('about_version_value', 'Version {0}');
   m.set('label_version_colon', 'Version:');
   m.set('mylist_user_lists', 'My playlists');
   m.set('custom_source_url_placeholder', 'Enter online JS source URL');

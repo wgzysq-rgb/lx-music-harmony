@@ -4,7 +4,7 @@
  * - 首次启动（未同意）时全屏覆盖，必须先同意才能使用；
  * - 顶部可在「许可协议 / 隐私政策」之间切换，两篇都能在同意前读到（上架要求）；
  * - 「设置 → 关于」进入时为只读模式，底部只有一个「关闭」；
- * - 未同意时「接受」按钮带 20 秒倒计时（与安卓版一致，避免用户没看就点同意）；
+ * - 未同意时「接受」按钮带 3 秒倒计时（避免用户没看就点同意，又不至于干等）；
  * - 拒绝则退出应用。
  */
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -20,7 +20,7 @@ import { SheetHeader } from '../ui/SheetHeader';
 const DOMAIN = 0x0001;
 const TAG = 'PactDialog';
 /** 未同意时的强制阅读倒计时（秒） */
-const ACCEPT_COUNTDOWN_SECONDS = 20;
+const ACCEPT_COUNTDOWN_SECONDS = 3;
 /** 文档种类：许可协议 / 隐私政策 */
 const DOC_PACT: string = 'pact';
 const DOC_PRIVACY: string = 'privacy';

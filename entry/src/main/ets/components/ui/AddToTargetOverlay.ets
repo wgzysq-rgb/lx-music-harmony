@@ -63,26 +63,47 @@ export struct AddToTargetOverlay {
     this.watchKeyboard(false);
   }
 
-  /** 监听键盘高度：面板底部留出键盘的空间（单位从 px 换算成 vp） */
+  /**
+   * 监听键盘高度：面板底部留出键盘的空间（单位从 px 换算成 vp）。
+   *
+   * 全程 try/catch：这是 aboutToAppear 里唯一的异步动作，一旦抛出就会把整个
+   * 浮层的挂载带下去（表现为「面板一次都不弹」）。避让只是锦上添花，
+   * 拿不到窗口就退化成不避让，绝不能影响面板本身能不能显示。
+   */
   private watchKeyboard(on: boolean): void {
     if (on) {
       if (this.keyboardListener !== null) {
         return;
       }
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      window.getLastWindow(context).then((win: window.Window): void => {
-        this.appWindow = win;
-        this.keyboardListener = (height: number): void => {
-          this.keyboardHeight = this.getUIContext().px2vp(height);
-        };
-        win.on('keyboardHeightChange', this.keyboardListener);
-      }).catch((): void => {
-        // 拿不到窗口就退化为不避让（输入法自带「完成」键仍可提交）
-      });
+      try {
+        const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+        if (!context) {
+          return;
+        }
+        window.getLastWindow(context).then((win: window.Window): void => {
+          try {
+            this.appWindow = win;
+            this.keyboardListener = (height: number): void => {
+              this.keyboardHeight = this.getUIContext().px2vp(height);
+            };
+            win.on('keyboardHeightChange', this.keyboardListener);
+          } catch (err) {
+            hilog.warn(DOMAIN, TAG, 'watchKeyboard bind failed: %{public}s', JSON.stringify(err));
+          }
+        }).catch((err: Error): void => {
+          hilog.warn(DOMAIN, TAG, 'getLastWindow failed: %{public}s', err.message);
+        });
+      } catch (err) {
+        hilog.warn(DOMAIN, TAG, 'watchKeyboard skipped: %{public}s', JSON.stringify(err));
+      }
       return;
     }
-    if (this.appWindow !== null && this.keyboardListener !== null) {
-      this.appWindow.off('keyboardHeightChange', this.keyboardListener);
+    try {
+      if (this.appWindow !== null && this.keyboardListener !== null) {
+        this.appWindow.off('keyboardHeightChange', this.keyboardListener);
+      }
+    } catch (err) {
+      hilog.warn(DOMAIN, TAG, 'watchKeyboard unbind failed: %{public}s', JSON.stringify(err));
     }
     this.appWindow = null;
     this.keyboardListener = null;

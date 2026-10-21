@@ -494,7 +494,7 @@ export function buildZhCN(): Map<string, string> {
   m.set('view_full_chart', '查看完整榜单');
   m.set('play_tab_lyric', '歌词');
   m.set('mylist_empty_hint', '点击右上角「新建」创建第一个歌单，或在播放页将歌曲加入歌单');
-  m.set('about_version_value', '版本 1.0.0');
+  m.set('about_version_value', '版本 {0}');
   m.set('label_version_colon', '版本:');
   m.set('mylist_user_lists', '自建歌单');
   m.set('custom_source_url_placeholder', '输入在线JS源文件地址');

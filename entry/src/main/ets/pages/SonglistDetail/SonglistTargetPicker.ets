@@ -80,6 +80,7 @@ export async function pickAddTarget(): Promise<AddTarget | null> {
     options.push({ label: targets[i].name, value: targets[i].id });
   }
 
+  hilog.info(DOMAIN, TAG, 'pickAddTarget: open with %{public}d targets', options.length);
   const picked: string = await sheetService.addToTarget(t('player_add_to_list'), options);
   hilog.info(DOMAIN, TAG, 'pickAddTarget: picked=[%{public}s]', picked);
   if (picked.length === 0) {
