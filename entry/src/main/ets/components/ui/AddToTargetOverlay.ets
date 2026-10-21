@@ -102,10 +102,12 @@ export struct AddToTargetOverlay {
     }
   }
 
-  /** 行区高度：按选项数（上限 8 行）算，避免面板出现大片空白 */
+  /**
+   * 滚动区高度：按选项数算（上限 8 行）。
+   * 「新建歌单」已移到 List 外面固定显示，这里不再 +1。
+   */
   private listHeight(): number {
-    const rows: number = Math.min(
-      this.options.length + 1, AddToTargetOverlay.MAX_VISIBLE_ROWS); // +1 是「新建歌单」那一行
+    const rows: number = Math.min(this.options.length, AddToTargetOverlay.MAX_VISIBLE_ROWS);
     return rows * DesignTokens.touchTarget();
   }
 
@@ -179,62 +181,75 @@ export struct AddToTargetOverlay {
     }
   }
 
-  /** 歌单列表 + 末尾「新建歌单」 */
+  /**
+   * 歌单列表 + 底部固定的「新建歌单」。
+   *
+   * 「新建歌单」**故意不放进 List**：List 超过 8 行就会变成滚动区，自建歌单一多，
+   * 它作为最后一项会被折叠到看不见（用户反馈「弹框里没有新建歌单」）。
+   * 固定在滚动区下面，无论有多少歌单都始终可见可直接点。
+   */
   @Builder
   TargetList() {
-    List() {
-      ForEach(this.options, (option: SettingOption) => {
-        ListItem() {
-          Row() {
-            Text(option.label)
-              .fontSize(DesignTokens.fontTitle())
-              .fontColor(DesignTokens.labelPrimary(this.theme))
-              .layoutWeight(1)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-          }
-          .width('100%')
-          .height(DesignTokens.touchTarget())
-          .alignItems(VerticalAlign.Center)
-          .hoverEffect(HoverEffect.Highlight)
-          .onClick((): void => {
-            hilog.info(DOMAIN, TAG, 'tap target row [%{public}s]', option.value);
-            if (this.onPick) {
-              this.onPick(option.value);
+    Column() {
+      List() {
+        ForEach(this.options, (option: SettingOption) => {
+          ListItem() {
+            Row() {
+              Text(option.label)
+                .fontSize(DesignTokens.fontTitle())
+                .fontColor(DesignTokens.labelPrimary(this.theme))
+                .layoutWeight(1)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
             }
-          })
-        }
-      }, (option: SettingOption) => option.value)
-
-      ListItem() {
-        Row({ space: 10 }) {
-          SymbolGlyph($r('sys.symbol.plus'))
-            .fontSize(DesignTokens.iconLg())
-            .fontColor([DesignTokens.accent()])
-          Text(t('list_create_title'))
-            .fontSize(DesignTokens.fontTitle())
-            .fontColor(DesignTokens.accent())
-            .layoutWeight(1)
-        }
-        .width('100%')
-        .height(DesignTokens.touchTarget())
-        .alignItems(VerticalAlign.Center)
-        .hoverEffect(HoverEffect.Highlight)
-        .onClick((): void => {
-          hilog.info(DOMAIN, TAG, 'tap create row -> creating=true');
-          this.creating = true;
-        })
+            .width('100%')
+            .height(DesignTokens.touchTarget())
+            .alignItems(VerticalAlign.Center)
+            .hoverEffect(HoverEffect.Highlight)
+            .onClick((): void => {
+              hilog.info(DOMAIN, TAG, 'tap target row [%{public}s]', option.value);
+              if (this.onPick) {
+                this.onPick(option.value);
+              }
+            })
+          }
+        }, (option: SettingOption) => option.value)
       }
+      .width('100%')
+      .height(this.listHeight())
+      .scrollBar(BarState.Off)
+      .divider({
+        strokeWidth: 0.33,
+        color: DesignTokens.hairlineSeparator(this.theme),
+        startMargin: DesignTokens.spaceGutter(),
+        endMargin: DesignTokens.spaceGutter(),
+      })
+
+      // 「新建歌单」固钉在面板最下方
+      Row()
+        .width('100%')
+        .height(1)
+        .backgroundColor(DesignTokens.hairlineSeparator(this.theme))
+      Row({ space: 10 }) {
+        SymbolGlyph($r('sys.symbol.plus'))
+          .fontSize(DesignTokens.iconLg())
+          .fontColor([DesignTokens.accent()])
+        Text(t('list_create_title'))
+          .fontSize(DesignTokens.fontTitle())
+          .fontColor(DesignTokens.accent())
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .height(DesignTokens.touchTarget())
+      .alignItems(VerticalAlign.Center)
+      .hoverEffect(HoverEffect.Highlight)
+      .accessibilityText(t('list_create_title'))
+      .onClick((): void => {
+        hilog.info(DOMAIN, TAG, 'tap create row -> creating=true');
+        this.creating = true;
+      })
     }
     .width('100%')
-    .height(this.listHeight())
-    .scrollBar(BarState.Off)
-    .divider({
-      strokeWidth: 0.33,
-      color: DesignTokens.hairlineSeparator(this.theme),
-      startMargin: DesignTokens.spaceGutter(),
-      endMargin: DesignTokens.spaceGutter(),
-    })
   }
 
   /** 新建歌单：输入名字 */

@@ -12,7 +12,7 @@ import { songRowToListItem, songRowToMusicInfo } from '../../core/list/SongMappe
 import { dislikeList } from '../../core/dislike/DislikeList';
 import { buildShareText, getMusicDetailPageUrl } from '../../core/music/MusicDetailUrl';
 import { shareText, type ShareResult } from '../../service/ShareService';
-import { pickAddTarget, type AddTarget } from './SonglistTargetPicker';
+import { pickAddTarget, listContainsMusic, type AddTarget } from './SonglistTargetPicker';
 import { downloadOne } from './SonglistActions';
 import type { SongItem } from './SonglistTypes';
 
@@ -37,7 +37,7 @@ export async function shareSongRow(
 }
 
 /**
- * 加入歌单的结果：区分「用户取消」「成功」「失败」三种结局
+ * 加入歌单的结果：区分「用户取消」「成功」「已在列表」「失败」四种结局
  */
 export interface AddToListOutcome {
   /** 用户在面板里取消 —— 调用方不提示、不落库 */
@@ -46,6 +46,8 @@ export interface AddToListOutcome {
   listName: string;
   /** 错误描述，空串表示成功 */
   error: string;
+  /** 这首歌本来就在目标歌单里（没有发生任何变化，提示要如实说） */
+  already: boolean;
 }
 
 /**
@@ -61,20 +63,26 @@ export async function addRowToList(song: SongItem): Promise<AddToListOutcome> {
   } catch (err) {
     const message = err instanceof Error ? err.message : JSON.stringify(err);
     hilog.error(DOMAIN, TAG, 'pick add target failed: %{public}s', message);
-    return { cancelled: false, listName: '', error: message };
+    return { cancelled: false, listName: '', error: message, already: false };
   }
   if (!target) {
-    return { cancelled: true, listName: '', error: '' };
+    return { cancelled: true, listName: '', error: '', already: false };
+  }
+
+  const item: MusicItem = songRowToListItem(song);
+  // 重复添加不落库也不报错，但要如实告诉用户「本来就有」，别让他以为加了没生效
+  if (listContainsMusic(target.id, item.id)) {
+    hilog.info(DOMAIN, TAG, 'already in list [%{public}s], skip', target.name);
+    return { cancelled: false, listName: target.name, error: '', already: true };
   }
 
   try {
-    const item: MusicItem = songRowToListItem(song);
     await addMusicToList(target.id, item);
-    return { cancelled: false, listName: target.name, error: '' };
+    return { cancelled: false, listName: target.name, error: '', already: false };
   } catch (err) {
     const message = err instanceof Error ? err.message : JSON.stringify(err);
     hilog.error(DOMAIN, TAG, 'add to list failed: %{public}s', message);
-    return { cancelled: false, listName: target.name, error: message };
+    return { cancelled: false, listName: target.name, error: message, already: false };
   }
 }
 

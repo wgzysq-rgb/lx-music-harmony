@@ -395,6 +395,7 @@ export function buildZhCN(): Map<string, string> {
   m.set('download_save_cancelled', '用户取消保存到公共下载目录');
   m.set('error_network_unavailable', '网络连接不可用，请检查网络设置');
   m.set('toast_add_to_list_failed', '添加到歌单失败');
+  m.set('toast_already_in_list', '这首歌已经在「{0}」里了');
   m.set('list_sort', '排序');
   m.set('list_sort_by_field', '按字段');
   m.set('list_sort_by_type', '排序方式');

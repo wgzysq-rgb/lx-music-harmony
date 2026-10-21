@@ -13,7 +13,16 @@
 import { appLog as hilog } from '../../core/log/AppLogger';
 import { t } from '../../service/LocalizationService';
 import { sheetService, NEW_TARGET_PREFIX, type SheetOption } from '../../service/SheetService';
-import { createUserList, getUserList, LIST_IDS, type ListInfo } from '../../service/ListService';
+import {
+  createUserList,
+  getDefaultList,
+  getLoveList,
+  getUserList,
+  getUserListMusic,
+  LIST_IDS,
+  type ListInfo,
+  type MusicItem,
+} from '../../service/ListService';
 
 const TAG = 'SonglistTargetPicker';
 const DOMAIN: number = 0x0001;
@@ -24,10 +33,33 @@ export interface AddTarget {
   name: string;
 }
 
-/** 可加入的目标顺序：默认列表 → 我喜欢 → 自建列表 */
+/**
+ * 歌单里是否已经有这首歌。
+ *
+ * addMusicToList 对重复添加是**静默跳过**的，调用方无从区分「加了」和「本来就有」，
+ * 提示就会说谎（明明没变化也报「已添加」）。这里显式查一遍，让调用方给真实反馈。
+ */
+export function listContainsMusic(listId: string, musicId: string): boolean {
+  let list: MusicItem[] = [];
+  if (listId === LIST_IDS.LOVE) {
+    list = getLoveList();
+  } else if (listId === LIST_IDS.DEFAULT) {
+    list = getDefaultList();
+  } else {
+    list = getUserListMusic(listId);
+  }
+  return list.some((item: MusicItem): boolean => item.id === musicId);
+}
+
+/**
+ * 可加入的目标顺序：我喜欢 → 自建列表。
+ *
+ * **故意不放「默认列表」**：它在本 App 里没有任何入口页（我的页只有
+ * 我喜欢 / 播放历史 / 本地音乐，也没有它的路由），加进去用户哪儿都看不到，
+ * 表现就跟「点了却没添加」一样。与之相对，「喜欢列表」和自建歌单都有页面可进。
+ */
 function collectTargets(): AddTarget[] {
   const targets: AddTarget[] = [];
-  targets.push({ id: LIST_IDS.DEFAULT, name: t('default_list_label') });
   targets.push({ id: LIST_IDS.LOVE, name: t('love_title') });
   const userLists: ListInfo[] = getUserList();
   for (let i = 0; i < userLists.length; i++) {

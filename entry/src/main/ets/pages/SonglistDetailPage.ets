@@ -539,7 +539,7 @@ export struct SonglistDetailPage {
     return { source: this.listInfo.source, listId: this.listInfo.id, name: this.listInfo.name };
   }
 
-  /** 批量加入默认列表 */
+  /** 批量加入歌单（面板里选目标 / 新建） */
   private async batchAddToPlaylist(): Promise<void> {
     await batchAddToList(this.selectedSongs(), this.toast());
     this.exitSelectMode();
@@ -845,9 +845,14 @@ export struct SonglistDetailPage {
     if (result.cancelled) {
       return;
     }
-    this.showToast(result.error.length === 0
-      ? tf('toast_added_quoted', [result.listName])
-      : t('toast_add_to_list_failed') + ': ' + result.error);
+    if (result.error.length > 0) {
+      this.showToast(t('toast_add_to_list_failed') + ': ' + result.error);
+      return;
+    }
+    // 重复添加没发生任何变化，提示要如实说，别让用户以为加了没生效
+    this.showToast(result.already
+      ? tf('toast_already_in_list', [result.listName])
+      : tf('toast_added_quoted', [result.listName]));
   }
 
   // 下载单曲（从菜单调用）

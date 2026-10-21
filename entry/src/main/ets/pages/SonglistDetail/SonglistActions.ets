@@ -10,7 +10,7 @@ import { t, tf } from '../../service/LocalizationService';
 import { addMusicToList, removeMusicsFromList } from '../../service/ListService';
 import { download } from '../../core/music/MusicFeatureEntry';
 import { songRowToListItem, songRowToMusicInfo } from '../../core/list/SongMappers';
-import { pickAddTarget, type AddTarget } from './SonglistTargetPicker';
+import { pickAddTarget, listContainsMusic, type AddTarget } from './SonglistTargetPicker';
 import type { MusicInfo } from '../../types/MusicTypes';
 import type { SongItem } from './SonglistTypes';
 
@@ -31,7 +31,11 @@ export interface SonglistTarget {
 
 /**
  * 批量加入歌单：先弹面板选目标（含新建），再逐首落库。
- * 返回成功条数；用户取消返回 0 且不提示。
+ *
+ * 已经在目标歌单里的歌**跳过不计数**（addMusicToList 对重复是静默跳过，
+ * 照原样计数会把「没变化」也报成「已加入」，用户对着列表数不出来就会
+ * 以为加了没生效）。全部都是重复时如实提示。
+ * 返回真正新增的条数；用户取消返回 0 且不提示。
  */
 export async function batchAddToList(songs: SongItem[], toast: ActionToast): Promise<number> {
   if (songs.length === 0) {
@@ -43,15 +47,25 @@ export async function batchAddToList(songs: SongItem[], toast: ActionToast): Pro
     return 0;
   }
   let added = 0;
+  let skipped = 0;
   for (let i = 0; i < songs.length; i++) {
+    const item = songRowToListItem(songs[i]);
+    if (listContainsMusic(target.id, item.id)) {
+      skipped++;
+      continue;
+    }
     try {
-      await addMusicToList(target.id, songRowToListItem(songs[i]));
+      await addMusicToList(target.id, item);
       added++;
     } catch (err) {
       hilog.warn(DOMAIN, TAG, 'batch add failed: %{public}s', JSON.stringify(err));
     }
   }
-  toast(tf('toast_batch_added_to_list', [added.toString(), target.name]));
+  if (added === 0 && skipped > 0) {
+    toast(tf('toast_already_in_list', [target.name]));
+  } else {
+    toast(tf('toast_batch_added_to_list', [added.toString(), target.name]));
+  }
   return added;
 }
 
