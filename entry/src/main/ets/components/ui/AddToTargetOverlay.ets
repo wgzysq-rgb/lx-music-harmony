@@ -41,6 +41,16 @@ export struct AddToTargetOverlay {
   @Prop options: SettingOption[] = [];
   onPick?: (value: string) => void;
   onCancel?: () => void;
+  /**
+   * 宿主托管时的请求代号。
+   *
+   * 必须用 @Prop：普通成员变量只在面板**创建**时赋值，父组件重建时不刷新。
+   * 自绘浮层虽然不换窗口，但同样存在「连着弹两次、回调还是第一次那个」的问题。
+   */
+  @Prop requestSeq: number = 0;
+  /** 宿主托管专用：把代号一起回传，宿主据此识别已销毁浮层的迟到回调 */
+  onPickSeq?: (value: string, seq: number) => void;
+  onCancelSeq?: (seq: number) => void;
 
   /** false = 列歌单；true = 输入新名字。两者共用同一个浮层 */
   @State creating: boolean = false;
@@ -142,8 +152,23 @@ export struct AddToTargetOverlay {
       this.draft = '';
       return;
     }
+    if (this.onCancelSeq) {
+      this.onCancelSeq(this.requestSeq);
+      return;
+    }
     if (this.onCancel) {
       this.onCancel();
+    }
+  }
+
+  /** 选中回传：宿主托管时带上请求代号，页面直连时走原来的 onPick */
+  private emitPick(value: string): void {
+    if (this.onPickSeq) {
+      this.onPickSeq(value, this.requestSeq);
+      return;
+    }
+    if (this.onPick) {
+      this.onPick(value);
     }
   }
 
@@ -152,9 +177,7 @@ export struct AddToTargetOverlay {
     if (name.length === 0) {
       return;
     }
-    if (this.onPick) {
-      this.onPick(`${NEW_TARGET_PREFIX}${name}`);
-    }
+    this.emitPick(`${NEW_TARGET_PREFIX}${name}`);
   }
 
   build() {
@@ -229,9 +252,7 @@ export struct AddToTargetOverlay {
             .hoverEffect(HoverEffect.Highlight)
             .onClick((): void => {
               hilog.info(DOMAIN, TAG, 'tap target row [%{public}s]', option.value);
-              if (this.onPick) {
-                this.onPick(option.value);
-              }
+              this.emitPick(option.value);
             })
           }
         }, (option: SettingOption) => option.value)

@@ -32,16 +32,40 @@ export struct InputSheet {
   onSubmit?: (value: string) => void;
   /** 关闭（点遮罩/取消） */
   onCancel?: () => void;
+  /**
+   * 宿主托管时的请求代号。
+   *
+   * 必须用 @Prop：普通成员变量只在面板**创建**时赋值，父组件重建时不刷新。
+   * 同类型面板连弹第二次时面板还是同一个实例，回调里带的一直是第一次的代号，
+   * 宿主按「过期回调」丢弃 —— 表现就是输入完点确定没反应。
+   */
+  @Prop requestSeq: number = 0;
+  /** 宿主托管专用：把代号一起回传，宿主据此识别已销毁面板的迟到回调 */
+  onSubmitSeq?: (value: string, seq: number) => void;
+  onCancelSeq?: (seq: number) => void;
 
   private cancel(): void {
     if (this.hostControlled) {
       // 宿主托管：visible 由 SheetHost.finish 统一收，这里只回传取消
-      if (this.onCancel) {
+      if (this.onCancelSeq) {
+        this.onCancelSeq(this.requestSeq);
+      } else if (this.onCancel) {
         this.onCancel();
       }
       return;
     }
     this.visible = dismissSheet(this.onCancel);
+  }
+
+  /** 提交回传：宿主托管时带上请求代号，页面直连时走原来的 onSubmit */
+  private emitSubmit(value: string): void {
+    if (this.onSubmitSeq) {
+      this.onSubmitSeq(value, this.requestSeq);
+      return;
+    }
+    if (this.onSubmit) {
+      this.onSubmit(value);
+    }
   }
 
   @State draft: string = '';
@@ -107,9 +131,7 @@ export struct InputSheet {
           .onClick(() => {
             // 必须先回调再关闭：bindSheet 关闭会触发 onDismiss（按「取消」处理），
             // 反过来会先用空值结束请求，用户输入就被吞掉了。
-            if (this.onSubmit) {
-              this.onSubmit(this.draft);
-            }
+            this.emitSubmit(this.draft);
             this.visible = false;
           })
       }

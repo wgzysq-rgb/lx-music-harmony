@@ -22,6 +22,17 @@ export struct SelectSheet {
   /** 关闭（点遮罩/取消）：调用方据此按「未修改」处理 */
   onCancel?: () => void;
   /**
+   * 宿主托管时的请求代号。
+   *
+   * 必须用 @Prop：普通成员变量只在面板**创建**时赋值，父组件重建时不刷新。
+   * 同类型面板连弹第二次时面板还是同一个实例，回调里带的一直是第一次的代号，
+   * 宿主按「过期回调」丢弃 —— 表现就是选项点了没反应。
+   */
+  @Prop requestSeq: number = 0;
+  /** 宿主托管专用：把代号一起回传，宿主据此识别已销毁面板的迟到回调 */
+  onPickSeq?: (value: string, seq: number) => void;
+  onCancelSeq?: (seq: number) => void;
+  /**
    * 选中后是否由本组件自己关闭。
    *
    * 页面直接使用时为 true（现有行为不变）；
@@ -54,12 +65,25 @@ export struct SelectSheet {
   private cancel(): void {
     if (this.hostControlled) {
       // 宿主托管：visible 由 SheetHost.finish 统一收，这里只回传取消
-      if (this.onCancel) {
+      if (this.onCancelSeq) {
+        this.onCancelSeq(this.requestSeq);
+      } else if (this.onCancel) {
         this.onCancel();
       }
       return;
     }
     this.visible = dismissSheet(this.onCancel);
+  }
+
+  /** 选中回传：宿主托管时带上请求代号，页面直连时走原来的 onPick */
+  private emitPick(value: string): void {
+    if (this.onPickSeq) {
+      this.onPickSeq(value, this.requestSeq);
+      return;
+    }
+    if (this.onPick) {
+      this.onPick(value);
+    }
   }
 
   build() {
@@ -112,9 +136,7 @@ export struct SelectSheet {
           .focusable(true)
           .onKeyEvent((event: KeyEvent): void => {
             if (isConfirmKey(event)) {
-              if (this.onPick) {
-                this.onPick(option.value);
-              }
+              this.emitPick(option.value);
               if (this.closeOnPick) {
                 this.visible = false;
               }
@@ -124,9 +146,7 @@ export struct SelectSheet {
         .accessibilityText(t('a11y_select_all'))
         .onClick(() => {
           // 先回调再关闭（同 InputSheet：关闭事件会把请求按取消处理）
-          if (this.onPick) {
-            this.onPick(option.value);
-          }
+          this.emitPick(option.value);
           if (this.closeOnPick) {
             this.visible = false;
           }

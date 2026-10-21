@@ -65,11 +65,42 @@ type SheetPresenter = (request: SheetRequest) => void;
 
 class SheetServiceImpl {
   private presenter: SheetPresenter | null = null;
-  private busy: boolean = false;
+  /**
+   * 当前未结束请求的「强制收尾」句柄。
+   *
+   * 它就是原来的 busy 锁，但换成了可主动调用：早期只靠一个 boolean，
+   * 一旦上一次面板的回调丢了（同类型面板连弹、组件被复用而回调还是旧的），
+   * boolean 就永远是 true，之后**整个应用**所有浮层都弹不出来。
+   * 现在新请求进来时先把上一个按「取消」收掉再接管，锁不会烂在原地。
+   */
+  private releaser: (() => void) | null = null;
 
   /** 宿主注册（应用启动时由 SheetHost 调用一次） */
   register(presenter: SheetPresenter): void {
     this.presenter = presenter;
+  }
+
+  /**
+   * 宿主卸载（例如切到车机整屏界面）。
+   *
+   * 传入的 presenter 与当前登记的不是同一个就不动 —— 车机界面替换根节点时，
+   * 新旧宿主的 mount/unmount 顺序不保证，避免新宿主刚注册就被旧宿主注销。
+   */
+  unregister(presenter: SheetPresenter): void {
+    if (this.presenter !== presenter) {
+      return;
+    }
+    this.presenter = null;
+    // 未结束的请求按取消收掉，别让调用方的 await 永远悬着
+    this.releasePending();
+  }
+
+  private releasePending(): void {
+    const release = this.releaser;
+    this.releaser = null;
+    if (release) {
+      release();
+    }
   }
 
   /** 单选面板 */
@@ -132,16 +163,29 @@ class SheetServiceImpl {
       hilog.warn(DOMAIN, TAG, 'No sheet host registered, request dropped: %{public}s', title);
       return Promise.resolve('');
     }
-    if (this.busy) {
-      // 上一个面板还没结束，忽略重复请求，避免叠两个浮层
-      hilog.warn(DOMAIN, TAG, 'Sheet already showing, request dropped: %{public}s', title);
-      return Promise.resolve('');
+    if (this.releaser !== null) {
+      // 上一个面板还没结束就来了新请求：按取消把它收掉，再由新请求接管。
+      // 早期这里是「直接丢弃新请求」，一旦上一个面板的回调丢了锁就再也放不开，
+      // 表现就是用户看到的「点了一次之后设置里什么弹框都弹不出来」。
+      hilog.warn(DOMAIN, TAG, 'Superseding unfinished sheet with: %{public}s', title);
+      this.releasePending();
     }
-    this.busy = true;
     return new Promise<string>((resolve: (result: string) => void) => {
+      let settled: boolean = false;
+      // 零参的「强制收尾」句柄：新请求要顶掉时直接调它，按取消结束本请求
+      let release: () => void = (): void => {};
       const finish = (result: string): void => {
-        this.busy = false;
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.releaser === release) {
+          this.releaser = null;
+        }
         resolve(result);
+      };
+      release = (): void => {
+        finish('');
       };
       const request: SheetRequest = {
         kind,
@@ -154,6 +198,7 @@ class SheetServiceImpl {
         message,
         resolve: finish,
       };
+      this.releaser = release;
       this.presenter?.(request);
     });
   }

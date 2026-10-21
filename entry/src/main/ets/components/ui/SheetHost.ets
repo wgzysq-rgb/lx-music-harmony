@@ -49,33 +49,45 @@ export struct SheetHost {
   @State rows: SheetRow[] = [];
   @State message: string = '';
   private pending: SheetRequest | null = null;
+  /**
+   * 注册给 SheetService 的投递函数。
+   *
+   * 存成字段是为了卸载时能把它原样交回去 —— 车机界面替换根节点时新旧宿主的
+   * mount/unmount 顺序不保证，靠同一个引用比对，才不会把新宿主刚注册的那个注销掉。
+   */
+  private readonly presenter: (request: SheetRequest) => void = (request: SheetRequest): void => {
+    this.seq += 1;
+    this.pending = request;
+    this.kind = request.kind;
+    this.title = request.title;
+    this.options = request.options.map((item): SettingOption => {
+      const option: SettingOption = { label: item.label, value: item.value };
+      return option;
+    });
+    this.value = request.value;
+    this.placeholder = request.placeholder;
+    this.numberOnly = request.numberOnly;
+    this.rows = request.rows;
+    this.message = request.message;
+    if (request.kind === 'addToTarget') {
+      // 自绘浮层：旧 bindSheet 直接收起。它的收尾回调已因代号过期被忽略，
+      // 不会把新请求按取消结束。
+      this.visible = false;
+      this.overlayVisible = true;
+    } else {
+      this.overlayVisible = false;
+      this.visible = true;
+    }
+    hilog.info(DOMAIN, TAG, 'present kind=%{public}s seq=%{public}d', request.kind, this.seq);
+  };
 
   aboutToAppear() {
-    sheetService.register((request: SheetRequest): void => {
-      this.seq += 1;
-      this.pending = request;
-      this.kind = request.kind;
-      this.title = request.title;
-      this.options = request.options.map((item): SettingOption => {
-        const option: SettingOption = { label: item.label, value: item.value };
-        return option;
-      });
-      this.value = request.value;
-      this.placeholder = request.placeholder;
-      this.numberOnly = request.numberOnly;
-      this.rows = request.rows;
-      this.message = request.message;
-      if (request.kind === 'addToTarget') {
-        // 自绘浮层：旧 bindSheet 直接收起。它的收尾回调已因代号过期被忽略，
-        // 不会把新请求按取消结束。
-        this.visible = false;
-        this.overlayVisible = true;
-      } else {
-        this.overlayVisible = false;
-        this.visible = true;
-      }
-      hilog.info(DOMAIN, TAG, 'present kind=%{public}s seq=%{public}d', request.kind, this.seq);
-    });
+    sheetService.register(this.presenter);
+  }
+
+  aboutToDisappear() {
+    sheetService.unregister(this.presenter);
+    this.pending = null;
   }
 
   /**
@@ -104,13 +116,20 @@ export struct SheetHost {
   }
 
   /**
-   * 生成「只对当前请求生效」的完成回调（带请求代号校验）。
+   * 面板回传的「完成」回调 —— 代号由**面板自己**带回，不从这里捕获。
    *
-   * 旧面板被卸载时 bindSheet 会补发取消回调，代号对不上就直接忽略 ——
-   * 这是「菜单 → 添加到歌单」两步面板一闪而过 / 连弹都不弹的根因修复。
+   * 这一点是这个宿主的全部关键：`onPick` 这类普通成员变量在 ArkUI 里只在面板
+   * **创建**时赋值，父组件重建时不会刷新（只有 @Prop / @Link 会）。同类型面板
+   * 连弹第二次时，面板还是同一个实例，回调却仍是第一次那个闭包，代号对不上就
+   * 被当成过期回调丢掉 —— 表现是面板里的选项点了完全没反应，而且 SheetService
+   * 的锁再也放不开，之后所有弹框都弹不出来。
+   *
+   * 改成「@Prop 把代号送进面板 → 面板回传 → 这里与当前代号比对」：
+   * - 面板实例被复用（同类型连弹）：@Prop 会刷新，代号与当前一致，正常放行；
+   * - 面板真被销毁（换 kind）：它停在自己的旧代号上，迟到的 onDisappear 照样被拦下。
    */
-  private done(seq: number): (result: string) => void {
-    return (result: string): void => {
+  private doneWithSeq(): (result: string, seq: number) => void {
+    return (result: string, seq: number): void => {
       if (seq !== this.seq) {
         hilog.info(DOMAIN, TAG, 'stale sheet callback ignored (seq %{public}d)', seq);
         return;
@@ -119,22 +138,19 @@ export struct SheetHost {
     };
   }
 
-  /** done 的取消形态：onCancel 回调签名是空参 */
-  private cancelled(seq: number): () => void {
-    const done = this.done(seq);
-    return (): void => {
-      done('');
+  /** doneWithSeq 的取消形态 */
+  private cancelledWithSeq(): (seq: number) => void {
+    const done = this.doneWithSeq();
+    return (seq: number): void => {
+      done('', seq);
     };
   }
 
-  /** done 的菜单形态：MenuSheet 回传的是行下标 */
-  private pickedRow(seq: number): (index: number) => void {
-    return (index: number): void => {
-      if (seq !== this.seq) {
-        hilog.info(DOMAIN, TAG, 'stale sheet callback ignored (seq %{public}d)', seq);
-        return;
-      }
-      this.finish(index.toString());
+  /** doneWithSeq 的菜单形态：MenuSheet 回传的是行下标 */
+  private pickedRowWithSeq(): (index: number, seq: number) => void {
+    const done = this.doneWithSeq();
+    return (index: number, seq: number): void => {
+      done(index.toString(), seq);
     };
   }
 
@@ -143,36 +159,40 @@ export struct SheetHost {
       if (this.kind === 'input') {
         InputSheet({
           visible: $visible,
+          requestSeq: this.seq,
           title: this.title,
           placeholder: this.placeholder,
           value: this.value,
           numberOnly: this.numberOnly,
           hostControlled: true,
-          onSubmit: this.done(this.seq),
-          onCancel: this.cancelled(this.seq),
+          onSubmitSeq: this.doneWithSeq(),
+          onCancelSeq: this.cancelledWithSeq(),
         })
       } else if (this.kind === 'menu' || this.kind === 'confirm') {
         MenuSheet({
           visible: $visible,
+          requestSeq: this.seq,
           title: this.title,
           message: this.message,
           rows: this.rows,
           hostControlled: true,
-          onPick: this.pickedRow(this.seq),
-          onCancel: this.cancelled(this.seq),
+          onPickRowSeq: this.pickedRowWithSeq(),
+          onCancelSeq: this.cancelledWithSeq(),
         })
       } else if (this.kind === 'addToTarget') {
         // 自绘浮层：与动作菜单连着开也不会被 bindSheet 的收起动画吞掉
         AddToTargetOverlay({
           visible: this.overlayVisible,
+          requestSeq: this.seq,
           title: this.title,
           options: this.options,
-          onPick: this.done(this.seq),
-          onCancel: this.cancelled(this.seq),
+          onPickSeq: this.doneWithSeq(),
+          onCancelSeq: this.cancelledWithSeq(),
         })
       } else {
         SelectSheet({
           visible: $visible,
+          requestSeq: this.seq,
           title: this.title,
           options: this.options,
           value: this.value,
@@ -180,8 +200,8 @@ export struct SheetHost {
           // 否则调用方紧接着再开一个面板时会被收起动画吞掉
           closeOnPick: false,
           hostControlled: true,
-          onPick: this.done(this.seq),
-          onCancel: this.cancelled(this.seq),
+          onPickSeq: this.doneWithSeq(),
+          onCancelSeq: this.cancelledWithSeq(),
         })
       }
     }

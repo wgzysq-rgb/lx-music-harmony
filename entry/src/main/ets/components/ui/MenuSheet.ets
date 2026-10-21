@@ -35,6 +35,17 @@ export struct MenuSheet {
   @Prop hostControlled: boolean = false;
   onPick?: (index: number) => void;
   onCancel?: () => void;
+  /**
+   * 宿主托管时的请求代号。
+   *
+   * 必须用 @Prop：普通成员变量只在面板**创建**时赋值，父组件重建时不刷新。
+   * 同类型面板连弹第二次时面板还是同一个实例，回调里带的一直是第一次的代号，
+   * 宿主按「过期回调」丢弃 —— 表现就是菜单项点了没反应。
+   */
+  @Prop requestSeq: number = 0;
+  /** 宿主托管专用：把代号一起回传，宿主据此识别已销毁面板的迟到回调 */
+  onPickRowSeq?: (index: number, seq: number) => void;
+  onCancelSeq?: (seq: number) => void;
 
   /** 一屏最多展示多少行（更多则面板内滚动，避免面板顶到屏幕顶） */
   private static readonly MAX_VISIBLE_ROWS: number = 8;
@@ -49,7 +60,9 @@ export struct MenuSheet {
   private cancel(): void {
     if (this.hostControlled) {
       // 宿主托管：visible 由 SheetHost.finish 统一收，这里只回传取消
-      if (this.onCancel) {
+      if (this.onCancelSeq) {
+        this.onCancelSeq(this.requestSeq);
+      } else if (this.onCancel) {
         this.onCancel();
       }
       return;
@@ -67,6 +80,10 @@ export struct MenuSheet {
    */
   private pick(row: SheetRow): void {
     if (row.disabled) {
+      return;
+    }
+    if (this.onPickRowSeq) {
+      this.onPickRowSeq(row.index, this.requestSeq);
       return;
     }
     if (this.onPick) {
