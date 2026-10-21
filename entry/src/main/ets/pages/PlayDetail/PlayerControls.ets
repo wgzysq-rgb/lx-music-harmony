@@ -28,6 +28,11 @@ export struct PlayerControls {
   @Prop addToListText: string = '';
   /** 评论入口文案 */
   @Prop commentText: string = '';
+  /**
+   * 车机（HiCar）模式：连上车机时整条控制区放大、隐藏与驾驶无关的入口。
+   * 车机上「隔着中控屏点小按钮」的成功率极低，放大 + 减项比配色更有效。
+   */
+  @StorageProp('carMode') carMode: boolean = false;
 
   onSeekChange?: (value: number, mode: SliderChangeMode) => void;
   onPrev?: () => void;
@@ -46,6 +51,21 @@ export struct PlayerControls {
       return this.playModeText;
     }
     return this.commentText;
+  }
+
+  /** 车机模式下控制键的放大倍数：驾驶中「一眼看到、一按就中」比配色重要 */
+  private static readonly CAR_SCALE: number = 1.35;
+
+  /** 传送键圆形直径（车机模式下整体放大） */
+  private keySize(filled: boolean): number {
+    const base: number = filled ? DesignTokens.ctrlLg() : DesignTokens.ctrlMd();
+    return this.carMode ? Math.round(base * PlayerControls.CAR_SCALE) : base;
+  }
+
+  /** 传送键图标边长 */
+  private keyIconSize(filled: boolean): number {
+    const base: number = filled ? 20 : DesignTokens.iconLg();
+    return this.carMode ? Math.round(base * PlayerControls.CAR_SCALE) : base;
   }
 
   /** 传送键图标：播放/暂停随播放状态变化 */
@@ -125,11 +145,11 @@ export struct PlayerControls {
   @Builder
   TransportKey(kind: string, filled: boolean) {
     Stack() {
-      Circle({ width: filled ? DesignTokens.ctrlLg() : DesignTokens.ctrlMd(), height: filled ? DesignTokens.ctrlLg() : DesignTokens.ctrlMd() })
+      Circle({ width: this.keySize(filled), height: this.keySize(filled) })
         .fill(filled ? DesignTokens.accent() : DesignTokens.mutedFill(this.theme))
       Image(this.iconFor(kind))
-        .width(filled ? 20 : DesignTokens.iconLg())
-        .height(filled ? 20 : DesignTokens.iconLg())
+        .width(this.keyIconSize(filled))
+        .height(this.keyIconSize(filled))
         .fillColor(filled ? DesignTokens.onAccent() : DesignTokens.labelPrimary(this.theme))
         .margin(kind === 'play' && !this.isPlaying ? { left: 1 } : {})
     }
@@ -144,9 +164,9 @@ export struct PlayerControls {
     Column() {
       Row() {
         Text(this.currentTime)
-          .fontSize(DesignTokens.fontMicro())
+          .fontSize(this.carMode ? DesignTokens.fontBody() : DesignTokens.fontMicro())
           .fontColor(DesignTokens.labelTertiary(this.theme))
-          .width(44)
+          .width(this.carMode ? 64 : 44)
           .textAlign(TextAlign.Center)
         Slider({
           // 拖动中显示手指位置（previewProgress），松手才真正 seek
@@ -156,7 +176,7 @@ export struct PlayerControls {
           style: SliderStyle.OutSet,
         })
           .width('calc(100% - 88vp)')
-          .height(24)
+          .height(this.carMode ? 36 : 24)
           .blockColor(DesignTokens.accent())
           .trackColor(DesignTokens.mutedFill(this.theme))
           .selectedColor(DesignTokens.accent())
@@ -167,34 +187,38 @@ export struct PlayerControls {
           })
         // 右侧是总时长；拖动中显示预览位置，方便对齐歌词/试听
         Text(this.isSeeking ? this.previewTime : this.totalTime)
-          .fontSize(DesignTokens.fontMicro())
+          .fontSize(this.carMode ? DesignTokens.fontBody() : DesignTokens.fontMicro())
           .fontColor(this.isSeeking ? DesignTokens.accent() : DesignTokens.labelTertiary(this.theme))
-          .width(44)
+          .width(this.carMode ? 64 : 44)
           .textAlign(TextAlign.Center)
       }
       .width('100%')
       .padding({ left: 14, right: 14 })
 
-      Row({ space: 26 }) {
+      Row({ space: this.carMode ? 40 : 26 }) {
         this.TransportKey('prev', false)
         this.TransportKey('play', true)
         this.TransportKey('next', false)
       }
       .width('100%')
-      .height(92)
+      .height(this.carMode ? 132 : 92)
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
 
-      Row() {
-        this.MenuEntry($r('app.media.ic_pd_playlist'), 'add')
-        this.MenuEntry($r('app.media.ic_pd_loop'), 'mode')
-        this.MenuEntry($r('app.media.ic_pd_comment'), 'comment')
+      // 车机模式下隐藏这三个入口：添加歌单/评论在驾驶场景没有意义，
+      // 少一块可点区域反而降低误触，也把高度让给上面的大按钮。
+      if (!this.carMode) {
+        Row() {
+          this.MenuEntry($r('app.media.ic_pd_playlist'), 'add')
+          this.MenuEntry($r('app.media.ic_pd_loop'), 'mode')
+          this.MenuEntry($r('app.media.ic_pd_comment'), 'comment')
+        }
+        .width('100%')
+        .height(78)
+        .justifyContent(FlexAlign.SpaceAround)
+        .alignItems(VerticalAlign.Center)
+        .padding({ left: 10, right: 10 })
       }
-      .width('100%')
-      .height(78)
-      .justifyContent(FlexAlign.SpaceAround)
-      .alignItems(VerticalAlign.Center)
-      .padding({ left: 10, right: 10 })
 
       Blank()
         .width('100%')
