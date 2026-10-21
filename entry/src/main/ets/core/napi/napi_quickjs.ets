@@ -8,6 +8,7 @@
 
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { utf8Decode } from '../../utils/TextCodec';
+import { httpRequest } from '../network/http';
 import type { common } from '@kit.AbilityKit';
 import {
   getQuickJSLoaderModule,
@@ -67,6 +68,12 @@ let loadScriptFn: LoadScriptFn | null = null;
 let callJSFn: CallJSFn | null = null;
 let destroyFn: DestroyFn | null = null;
 
+/**
+ * 直连 quickjs_napi.so 时留一份句柄：异步桥（takePendingRequest / completeRequest /
+ * pumpEvents / hasPendingWork）只在直连模式下可用，loader 兜底路径没有这些导出。
+ */
+let directModule: QuickJSNativeModule | null = null;
+
 class QuickJSFunctionAdapter implements QuickJSNAPI {
   loadScript(script: string): string {
     hilog.info(DOMAIN, MODULE_TAG, 'QuickJS loadScript called, length: %{public}d', script.length);
@@ -90,6 +97,22 @@ class QuickJSFunctionAdapter implements QuickJSNAPI {
       destroyFn();
     }
   }
+
+  takePendingRequest(): string {
+    return directModule ? directModule.takePendingRequest() : '';
+  }
+
+  completeRequest(responseJson: string): boolean {
+    return directModule ? directModule.completeRequest(responseJson) : false;
+  }
+
+  pumpEvents(): string {
+    return directModule ? directModule.pumpEvents() : '[]';
+  }
+
+  hasPendingWork(): boolean {
+    return directModule ? directModule.hasPendingWork() : false;
+  }
 }
 
 /**
@@ -105,6 +128,7 @@ function loadNativeModule(): boolean {
       typeof directNapi.callJS === 'function' &&
       typeof directNapi.destroy === 'function') {
     hilog.info(DOMAIN, MODULE_TAG, 'Using direct quickjs_napi.so module');
+    directModule = directNapi;
     loadScriptFn = (script: string): string => directNapi.loadScript(script);
     callJSFn = (action: string, data: string): string => directNapi.callJS(action, data);
     destroyFn = (): void => directNapi.destroy();
@@ -118,6 +142,7 @@ function loadNativeModule(): boolean {
     const bundleCodeDir = context.bundleCodeDir;
     const candidates: string[] = [
       `${bundleCodeDir}/libs/arm64-v8a/libquickjs_napi.so`,
+      `${bundleCodeDir}/libs/x86_64/libquickjs_napi.so`,
       `${bundleCodeDir}/libs/libquickjs_napi.so`,
       `${bundleCodeDir}/libs/arm64-v8a/liblibquickjs_napi.so`,
       `${bundleCodeDir}/libs/liblibquickjs_napi.so`,
@@ -273,11 +298,244 @@ export function callPluginAction(action: string, data: string): string {
   }
 }
 
+// ==================== 异步桥（脚本取链必需） ====================
+
+/** 脚本通过 lx.request 发出的、等待宿主执行的 HTTP 请求 */
+interface ScriptPendingRequest {
+  requestKey: string;
+  url: string;
+  options: ScriptRequestOptions;
+}
+
+/** lx.request 的 options（脚本侧可传字段，其余忽略） */
+interface ScriptRequestOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string | Object;
+  timeout?: number;
+  binary?: boolean;
+}
+
+/** 回给 preload 的 HTTP 响应体（preload 的 handleNativeResponse 读这几个字段） */
+interface ScriptHttpResponse {
+  statusCode: number;
+  statusMessage: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+/** 一条 native -> JS 的响应载荷 */
+interface ScriptResponsePayload {
+  requestKey: string;
+  response?: ScriptHttpResponse;
+  error?: boolean;
+  errorMessage?: string;
+}
+
+/** pumpEvents 取回的一条脚本产出（已由原生侧拆包） */
+interface ScriptActionResult {
+  requestKey: string;
+  status: boolean;
+  errorMessage: string;
+  result?: Object | null;
+}
+
+/** 脚本返回的业务数据（preload 已按 action 校验过） */
+export interface ScriptActionResponse {
+  source?: string;
+  action?: string;
+  data?: Object | string | null;
+}
+
+let requestSeq = 0;
+
+function nextRequestKey(): string {
+  requestSeq++;
+  return `lxreq_${Date.now()}_${requestSeq}`;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise<void>((resolve: () => void) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/** 取一条脚本待发的请求；没有则返回 null */
+function takePendingRequest(): ScriptPendingRequest | null {
+  if (!quickjsModule) {
+    return null;
+  }
+  try {
+    const raw = quickjsModule.takePendingRequest();
+    if (!raw || raw.length === 0) {
+      return null;
+    }
+    return JSON.parse(raw) as ScriptPendingRequest;
+  } catch (e) {
+    hilog.warn(DOMAIN, MODULE_TAG, 'takePendingRequest parse failed: %{public}s',
+      formatErrorMessage(e as Object));
+    return null;
+  }
+}
+
+/** 把 HTTP 结果交回脚本，推进其 Promise 链 */
+function completeRequest(payload: ScriptResponsePayload): void {
+  if (!quickjsModule) {
+    return;
+  }
+  try {
+    quickjsModule.completeRequest(JSON.stringify(payload));
+  } catch (e) {
+    hilog.warn(DOMAIN, MODULE_TAG, 'completeRequest failed: %{public}s',
+      formatErrorMessage(e as Object));
+  }
+}
+
+/** 派遣到期定时器 + 跑完微任务，取回脚本产出的响应 */
+function pumpEvents(): ScriptActionResult[] {
+  if (!quickjsModule) {
+    return [];
+  }
+  try {
+    const raw = quickjsModule.pumpEvents();
+    if (!raw || raw.length === 0 || raw === '[]') {
+      return [];
+    }
+    try {
+      return JSON.parse(raw) as ScriptActionResult[];
+    } catch (parseErr) {
+      hilog.warn(DOMAIN, MODULE_TAG, 'pumpEvents parse failed: %{public}s raw=%{public}s',
+        formatErrorMessage(parseErr as Object), raw.length > 500 ? raw.substring(0, 500) : raw);
+      return [];
+    }
+  } catch (e) {
+    hilog.warn(DOMAIN, MODULE_TAG, 'pumpEvents call failed: %{public}s',
+      formatErrorMessage(e as Object));
+    return [];
+  }
+}
+
+/** 执行脚本发来的一条 HTTP 请求，并把结果写回 JS */
+async function runScriptRequest(req: ScriptPendingRequest): Promise<void> {
+  const opts: ScriptRequestOptions = req.options ?? {};
+  const header: Record<string, string> = opts.headers ?? {};
+  const method = (opts.method ?? 'GET').toUpperCase();
+  let extraData: string | undefined = undefined;
+  if (opts.body !== undefined && opts.body !== null) {
+    extraData = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
+  }
+  const timeout = opts.timeout && opts.timeout > 0 ? Math.min(opts.timeout, 30000) : 20000;
+
+  try {
+    const task = httpRequest(req.url, {
+      method: method as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD',
+      headers: header,
+      extraData: extraData,
+      timeout: timeout,
+      responseType: 'text',
+      connectTimeout: timeout,
+      readTimeout: timeout,
+    });
+    const response = await task.promise;
+    // body 必须是文本：preload 会在 JS 侧再包一层（见 user-api-preload.js 的 makeBody）
+    const bodyText = response.rawText;
+    hilog.info(DOMAIN, MODULE_TAG, 'script request status=%{public}d url=%{public}s body=%{public}s',
+      response.status, req.url, bodyText.length > 400 ? bodyText.substring(0, 400) : bodyText);
+    const payload: ScriptResponsePayload = {
+      requestKey: req.requestKey,
+      response: {
+        statusCode: response.status,
+        statusMessage: response.statusText,
+        headers: response.headers,
+        body: bodyText,
+      },
+    };
+    completeRequest(payload);
+  } catch (e) {
+    const message = formatErrorMessage(e as Object);
+    hilog.warn(DOMAIN, MODULE_TAG, 'script request failed: %{public}s %{public}s', req.url, message);
+    const payload: ScriptResponsePayload = {
+      requestKey: req.requestKey,
+      error: true,
+      errorMessage: message,
+    };
+    completeRequest(payload);
+  }
+}
+
+/**
+ * 让脚本执行一次 action 并等它把结果交回来。
+ *
+ * LX 自定义源的取链是异步的：脚本要自己发 HTTP、等响应、再 resolve Promise。
+ * QuickJS 是同步引擎，宿主必须在这段时间里反复「替它发请求 + 推进微任务」，
+ * 直到脚本通过 lx.send('response') 把结果吐出来。之前的实现是同步返回，
+ * 脚本的 Promise 永远停在 pending，所以取链必然拿不到地址。
+ *
+ * @param action preload 的 action 名（musicUrl / lyric / pic）
+ * @param source 音乐平台标识（kw/kg/tx/wy/mg）。源脚本靠它决定去哪个平台取链，
+ *               漏传会让脚本拼出 source=undefined 的请求，服务端直接拒绝
+ * @param infoJson 传给脚本的 info 对象（JSON 串）
+ * @param timeoutMs 整体超时
+ * @returns 脚本返回的数据（musicUrl 是 URL 字符串）；失败或超时返回 null
+ */
+export async function invokePluginAction(
+  action: string, source: string, infoJson: string, timeoutMs: number
+): Promise<ScriptActionResponse | null> {
+  if (!isInitialized || !quickjsModule) {
+    hilog.error(DOMAIN, MODULE_TAG, 'invokePluginAction: QuickJS not ready');
+    return null;
+  }
+
+  const requestKey = nextRequestKey();
+  const payload = `{"requestKey":${JSON.stringify(requestKey)},"source":${JSON.stringify(source)},` +
+    `"action":${JSON.stringify(action)},"info":${infoJson}}`;
+  hilog.info(DOMAIN, MODULE_TAG, 'invokePluginAction action=%{public}s source=%{public}s key=%{public}s',
+    action, source, requestKey);
+  callPluginAction('request', payload);
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    // 1) 把脚本要发的 HTTP 请求全部取出去发（不阻塞，完成后自己回写）
+    for (let i = 0; i < 8; i++) {
+      const pending = takePendingRequest();
+      if (!pending) {
+        break;
+      }
+      runScriptRequest(pending).catch((err: Error) => {
+        hilog.warn(DOMAIN, MODULE_TAG, 'runScriptRequest crashed: %{public}s', err.message);
+      });
+    }
+
+    // 2) 推进 JS（到期定时器 + 微任务），收取产出
+    const results = pumpEvents();
+    for (let i = 0; i < results.length; i++) {
+      const item = results[i];
+      if (item.requestKey === requestKey) {
+        if (!item.status) {
+          // preload 在脚本 reject 时回 {"status":false,"errorMessage":..}，
+          // 原先把这条当成功吞掉了，排查时只看得到「返回空 URL」
+          hilog.warn(DOMAIN, MODULE_TAG, 'script action error: %{public}s',
+            item.errorMessage.length > 0 ? item.errorMessage : 'unknown');
+          return null;
+        }
+        const parsed = item.result as ScriptActionResponse | null;
+        hilog.info(DOMAIN, MODULE_TAG, 'invokePluginAction done action=%{public}s', action);
+        return parsed;
+      }
+    }
+
+    await delay(25);
+  }
+
+  hilog.warn(DOMAIN, MODULE_TAG, 'invokePluginAction timeout action=%{public}s after %{public}dms',
+    action, timeoutMs);
+  return null;
+}
+
 /**
  * Destroy the QuickJS context and release resources
  */
-export function destroyQuickJS(): void {
-  if (!isInitialized) {
+export function destroyQuickJS(): void {  if (!isInitialized) {
     return;
   }
 

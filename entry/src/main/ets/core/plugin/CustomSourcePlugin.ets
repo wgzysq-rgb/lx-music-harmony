@@ -4,7 +4,14 @@
  */
 // 日志经由应用日志门面，既输出 hilog 也进入「设置 → 运行日志」
 import { appLog as hilog } from '../log/AppLogger';
-import { initQuickJS as initNativeQuickJS, loadPluginScript, callPluginAction, destroyQuickJS as destroyNativeQuickJS, loadPreloadScript } from '../napi/napi_quickjs';
+import {
+  initQuickJS as initNativeQuickJS,
+  loadPluginScript,
+  callPluginAction,
+  invokePluginAction,
+  destroyQuickJS as destroyNativeQuickJS,
+  loadPreloadScript
+} from '../napi/napi_quickjs';
 import { httpRequest } from '../network/http';
 import type { Plugin, PluginSongInfo, PluginLyricInfo, PluginSearchResult, PluginSongListResult, PluginBoard, PluginBoardDetail, PluginHotSearch } from './PluginManager';
 
@@ -31,6 +38,16 @@ interface QuickJSRequestResult {
   list?: object[];
   total?: number;
 }
+
+/** musicUrl 的 info.type 需要带上音质；preload 校验后 data 是 { type, url } */
+interface QuickJSMusicUrlData {
+  type?: string;
+  url?: string;
+}
+
+/** 取链超时：一次点击要等脚本自己发 HTTP 再回包，给足时间 */
+const MUSIC_URL_TIMEOUT_MS = 15000;
+const LYRIC_TIMEOUT_MS = 12000;
 
 // Plugin info interface
 interface PluginInfo {
@@ -440,29 +457,48 @@ export class CustomSourcePlugin implements Plugin {
       return '';
     }
 
+    const quickjsUrl = await this.requestMusicUrlFromScript(songInfo, quality);
+    if (quickjsUrl.length > 0) {
+      return quickjsUrl;
+    }
+    if (this.fallbackApiUrl.length > 0 && this.fallbackApiKey.length > 0) {
+      hilog.warn(DOMAIN, TAG, 'QuickJS returned empty musicUrl, fallback to script-api');
+      return await this.getMusicUrlByScriptApi(songInfo, quality);
+    }
+    return '';
+  }
+
+  /**
+   * 让脚本自己取链。
+   *
+   * 必须走异步桥（invokePluginAction）：脚本内部要发 HTTP（POST /music/url 之类），
+   * QuickJS 不会自己驱动 Promise，宿主得替它发请求并把响应喂回去，直到它 resolve。
+   * 之前这里是同步 callJS，脚本的 Promise 永远 pending，所以「导入成功但播放没声」。
+   */
+  private async requestMusicUrlFromScript(songInfo: PluginSongInfo, quality: string): Promise<string> {
     try {
-      const result = quickjsRequest('custom', 'musicUrl', {
-        mid: songInfo.songmid,
-        hash: songInfo.hash,
+      const infoJson = JSON.stringify({
         type: quality,
         musicInfo: songInfo,
       });
-      const quickjsUrl = result.url || '';
-      if (quickjsUrl.length > 0) {
-        return quickjsUrl;
+      // source 必须传：源脚本按它决定去哪个平台取链，缺了会拼出 source=undefined
+      const source = songInfo.source && songInfo.source.length > 0 ? songInfo.source : 'kw';
+      const response = await invokePluginAction('musicUrl', source, infoJson, MUSIC_URL_TIMEOUT_MS);
+      if (!response) {
+        return '';
       }
-      if (this.fallbackApiUrl.length > 0 && this.fallbackApiKey.length > 0) {
-        hilog.warn(DOMAIN, TAG, 'QuickJS returned empty musicUrl, fallback to script-api');
-        return await this.getMusicUrlByScriptApi(songInfo, quality);
+      const data = response.data as QuickJSMusicUrlData | string | null;
+      if (typeof data === 'string') {
+        return data;
       }
-      return '';
+      const url = data?.url ?? '';
+      if (url.length === 0) {
+        hilog.warn(DOMAIN, TAG, 'script returned empty musicUrl for %{public}s',
+          songInfo.songmid ?? songInfo.hash ?? '');
+      }
+      return url;
     } catch (e) {
-      hilog.warn(DOMAIN, TAG, 'onGetMusicUrl failed: %{public}s', (e as Error)?.message);
-      if (this.fallbackApiUrl.length > 0 && this.fallbackApiKey.length > 0) {
-        hilog.warn(DOMAIN, TAG, 'QuickJS musicUrl threw error, fallback to script-api');
-        return await this.getMusicUrlByScriptApi(songInfo, quality);
-      }
-      hilog.warn(DOMAIN, TAG, 'QuickJS musicUrl failed and no fallback available');
+      hilog.warn(DOMAIN, TAG, 'requestMusicUrlFromScript failed: %{public}s', (e as Error)?.message);
       return '';
     }
   }
@@ -476,12 +512,22 @@ export class CustomSourcePlugin implements Plugin {
     }
 
     try {
-      const result = quickjsRequest('custom', 'lyric', {
-        mid: songInfo.songmid,
-        hash: songInfo.hash,
-        musicInfo: songInfo,
-      });
-      return { lyric: result.lyric || '' };
+      const infoJson = JSON.stringify({ musicInfo: songInfo });
+      const source = songInfo.source && songInfo.source.length > 0 ? songInfo.source : 'kw';
+      const response = await invokePluginAction('lyric', source, infoJson, LYRIC_TIMEOUT_MS);
+      if (!response) {
+        return { lyric: '' };
+      }
+      const data = response.data as PluginLyricInfo | null;
+      if (!data) {
+        return { lyric: '' };
+      }
+      return {
+        lyric: data.lyric ?? '',
+        tlyric: data.tlyric ?? '',
+        lxlyric: data.lxlyric ?? '',
+        rlyric: data.rlyric ?? '',
+      };
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'onGetLyric failed: %{public}s', (e as Error)?.message);
       return { lyric: '' };
@@ -496,12 +542,16 @@ export class CustomSourcePlugin implements Plugin {
       return '';
     }
     try {
-      const result = quickjsRequest('custom', 'pic', {
-        mid: songInfo.songmid,
-        hash: songInfo.hash,
-        musicInfo: songInfo,
-      });
-      return result.url || result.pic || '';
+      const infoJson = JSON.stringify({ musicInfo: songInfo });
+      const source = songInfo.source && songInfo.source.length > 0 ? songInfo.source : 'kw';
+      const response = await invokePluginAction('pic', source, infoJson, LYRIC_TIMEOUT_MS);
+      if (!response) {
+        return '';
+      }
+      if (typeof response.data === 'string') {
+        return response.data;
+      }
+      return '';
     } catch (e) {
       hilog.warn(DOMAIN, TAG, 'onGetPic failed: %{public}s', (e as Error)?.message);
       return '';
@@ -649,6 +699,15 @@ export class CustomSourcePlugin implements Plugin {
     }
   }
 
+  /**
+   * QuickJS 不可用时的降级取链：直接按源脚本自己的协议打它的 API。
+   *
+   * 之前这里请求的是 `${api}/url/{source}/{id}/{quality}` —— 这个端点是臆造的，
+   * 源服务端根本没有，所以永远是 404/纯文本，日志里只剩一句
+   * "Unexpected Number in JSON"（正文不是 JSON 时 JSON.parse 报的错），
+   * 既拿不到地址又误导排查。现在改成与脚本完全一致的：
+   *   POST {API_URL}/music/url  body={source,musicId,quality}  头带 X-Api-Key
+   */
   private async getMusicUrlByScriptApi(songInfo: PluginSongInfo, quality: string): Promise<string> {
     try {
       const source = songInfo.source || 'kw';
@@ -656,27 +715,40 @@ export class CustomSourcePlugin implements Plugin {
       if (songId.length === 0) {
         return '';
       }
-      const requestUrl = `${this.fallbackApiUrl}/url/${source}/${songId}/${quality}`;
+      const requestUrl = `${this.fallbackApiUrl}/music/url`;
       const response = await httpRequest(requestUrl, {
-        method: 'GET',
-        header: {
+        method: 'POST',
+        headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'lx-music-harmony/1.0.0',
-          'X-Request-Key': this.fallbackApiKey,
+          'User-Agent': 'lx-music-mobile/2.0.0',
+          'X-Api-Key': this.fallbackApiKey,
         },
+        extraData: JSON.stringify({ source: source, musicId: songId, quality: quality }),
         responseType: 'text',
+        timeout: 15000,
       }).promise;
 
-      const raw = response.result;
-      const bodyText = typeof raw === 'string' ? raw : JSON.stringify(raw);
-      const body = JSON.parse(bodyText) as ScriptApiResponse;
-      if (body.code === 0 && body.url && body.url.length > 0) {
+      const bodyText = response.rawText;
+      if (!bodyText || bodyText.length === 0) {
+        hilog.warn(DOMAIN, TAG, 'script-api returned empty body (status=%{public}d)', response.status);
+        return '';
+      }
+      let body: ScriptApiResponse | null = null;
+      try {
+        body = JSON.parse(bodyText) as ScriptApiResponse;
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, 'script-api body is not JSON: %{public}s',
+          bodyText.length > 200 ? bodyText.substring(0, 200) : bodyText);
+        return '';
+      }
+      if (body && body.code === 200 && body.url && body.url.length > 0) {
         return body.url;
       }
-      hilog.error(DOMAIN, TAG, 'Script-api request failed: code=%{public}d, msg=%{public}s', body.code, body.msg || '');
+      hilog.warn(DOMAIN, TAG, 'script-api returned no url: code=%{public}d msg=%{public}s',
+        body?.code ?? -1, body?.msg ?? '');
       return '';
     } catch (e) {
-      hilog.error(DOMAIN, TAG, 'Script-api request error: %{public}s', formatErrorMessage(e as Object));
+      hilog.warn(DOMAIN, TAG, 'script-api request failed: %{public}s', formatErrorMessage(e as Object));
       return '';
     }
   }

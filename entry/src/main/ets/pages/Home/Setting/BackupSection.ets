@@ -21,6 +21,11 @@ import {
 } from '../../../service/PlaylistTransferService';
 import { SettingsSection } from '../../../components/ui/SettingsSection';
 import type { SettingSectionItem } from '../../../components/ui/SettingsTypes';
+import { InputSheet } from '../../../components/ui/InputSheet';
+import { parseShareLink, resolveShortLink, ShareLinkError } from '../../../core/list/ShareLinkParser';
+import type { ShareLinkParseResult, ShareLinkTarget } from '../../../core/list/ShareLinkParser';
+import { navigateTo, RouteName } from '../../../service/NavigationService';
+import type { NavigationParams } from '../../../service/NavigationService';
 import { WebDavSheet } from './WebDavSheet';
 import { normalizeWebDavUrl } from '../../../core/network/webdav/WebDavClient';
 
@@ -37,6 +42,9 @@ export struct BackupSection {
   /** WebDAV 配置状态（用于设置行说明与「WebDAV 上的备份」行显隐） */
   @State webdavConfigured: boolean = false;
   @State showWebDavSheet: boolean = false;
+  /** 导入分享歌单链接的面板 */
+  @State showImportLinkSheet: boolean = false;
+  @State importLinkDraft: string = '';
 
   private hostContext(): common.UIAbilityContext {
     return this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -455,8 +463,72 @@ export struct BackupSection {
         void this.importPlaylists();
       },
     });
+    // 与上面的「导入歌单」区别：那条吃本机导出的 JSON，这条吃各平台的分享链接
+    items.push({
+      type: 'button',
+      title: t('settings_import_share_link'),
+      description: t('settings_import_share_link_desc'),
+      onClick: (): void => {
+        this.importLinkDraft = '';
+        this.showImportLinkSheet = true;
+      },
+    });
 
     return items;
+  }
+
+  /**
+   * 打开分享链接对应的在线歌单。
+   *
+   * 只做跳转，不落库：由用户在歌单详情页自己点「收藏 / 保存」，
+   * 和从搜索结果点进歌单的路径完全一致，避免「导入」这个动作偷偷改本地数据。
+   *
+   * 短链要多一次网络请求（跟随 302 拿真实歌单 id），所以这里是 async。
+   */
+  private async openSharedSonglist(raw: string): Promise<void> {
+    const parsed: ShareLinkParseResult = parseShareLink(raw);
+    if (parsed.target) {
+      this.navigateToSonglist(parsed.target);
+      return;
+    }
+
+    if (parsed.error === ShareLinkError.SHORT_LINK && parsed.shortUrl.length > 0) {
+      appToast(t('share_link_resolving'));
+      const resolved = await resolveShortLink(parsed.shortUrl);
+      if (resolved.target) {
+        this.navigateToSonglist(resolved.target);
+      } else {
+        appToast(t('share_link_err_short'));
+      }
+      return;
+    }
+
+    appToast(this.shareLinkErrorText(parsed.error));
+  }
+
+  private navigateToSonglist(target: ShareLinkTarget): void {
+    hilog.info(DOMAIN, TAG, 'openSharedSonglist source=%{public}s id=%{public}s',
+      target.source, target.id);
+    const params: NavigationParams = {
+      songListId: target.id,
+      songListName: '',
+      songListSource: target.source,
+    };
+    navigateTo(RouteName.SONGLIST_DETAIL, params);
+  }
+
+  /** 解析失败时按原因给不同提示：区分「没粘到链接」和「平台不支持」才可行动 */
+  private shareLinkErrorText(error: ShareLinkError): string {
+    if (error === ShareLinkError.SHORT_LINK) {
+      return t('share_link_err_short');
+    }
+    if (error === ShareLinkError.NO_ID) {
+      return t('share_link_err_no_id');
+    }
+    if (error === ShareLinkError.UNKNOWN_PLATFORM) {
+      return t('share_link_err_platform');
+    }
+    return t('share_link_err_no_url');
   }
 
   build() {
@@ -477,6 +549,19 @@ export struct BackupSection {
           onClear: (): void => {
             void this.clearWebDav();
           },
+        })
+      }
+
+      if (this.showImportLinkSheet) {
+        InputSheet({
+          visible: $showImportLinkSheet,
+          title: t('share_link_sheet_title'),
+          placeholder: t('share_link_sheet_placeholder'),
+          value: this.importLinkDraft,
+          onSubmit: (text: string): void => {
+            void this.openSharedSonglist(text);
+          },
+          onCancel: (): void => {},
         })
       }
     }

@@ -8,8 +8,20 @@ project(quickjs_napi C CXX)
 add_compile_options(-ffile-prefix-map=${CMAKE_SOURCE_DIR}=/lx-music-harmony)
 
 # Use CMAKE_SYSROOT which is set by the HarmonyOS toolchain
+#
+# 目标架构必须跟着 hvigor 传进来的 OHOS_ARCH 走，不能写死 aarch64：
+# 模拟器镜像是 x86_64，写死会让 HAP 里只有 arm64-v8a 的 .so，
+# 安装时报 9568347（设备 ABI 与工程 ABI 不匹配）。
+if(OHOS_ARCH STREQUAL "x86_64")
+    set(OHOS_TOOLCHAIN_NAME "x86_64-linux-ohos")
+elseif(OHOS_ARCH STREQUAL "armeabi-v7a")
+    set(OHOS_TOOLCHAIN_NAME "arm-linux-ohos")
+else()
+    set(OHOS_TOOLCHAIN_NAME "aarch64-linux-ohos")
+endif()
+
 set(SYSROOT "${CMAKE_SYSROOT}")
-set(TARGET_LIB_DIR "${SYSROOT}/usr/lib/aarch64-linux-ohos")
+set(TARGET_LIB_DIR "${SYSROOT}/usr/lib/${OHOS_TOOLCHAIN_NAME}")
 set(TARGET_INCLUDE_DIR "${SYSROOT}/usr/include")
 
 # QuickJS source files - compile as C

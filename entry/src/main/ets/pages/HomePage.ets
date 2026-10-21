@@ -232,14 +232,11 @@ export struct HomePage {
   /** 读取搜索设置：默认搜索源与热搜开关 */
   private applySearchSettings(): void {
     const settings = settingsService.get();
-    const savedSource = settings.searchSource;
-    if (savedSource === 'kw' || savedSource === 'kg' || savedSource === 'tx'
-      || savedSource === 'wy' || savedSource === 'mg') {
-      this.currentSource = savedSource;
-    }
     this.showHotSearchSetting = settings.showHotSearch;
     this.showSearchHistorySetting = settings.showSearchHistory;
-    // 首页顶部选过的音源优先（设置里的「默认搜索源」只在还没选过时生效）
+    // 音源只由 restoreLastSource 决定（上次选的 → 没选过才用设置里的默认值）。
+    // 这里不要再把 currentSource 先赋成 settings.searchSource：那会在每次
+    // 打开搜索时把用户刚切的源打回去，异步纠正前发出的查询就落到旧源上。
     void this.restoreLastSource();
     // 上次停留的 Tab 也接着用，避免每次都回到「歌单」
     void this.restoreLastTab();
@@ -250,12 +247,22 @@ export struct HomePage {
    *
    * 与「设置 → 搜索 → 默认搜索源」分开存：设置项是用户显式声明的默认值，
    * 不该被首页的一次临时切换静默改写；这里单独记「上次看的源」。
+   *
+   * 只有「从没在首页选过」时才回落到设置里的默认搜索源。原先调用方
+   * （applySearchSettings）在每次打开搜索时都先无条件把 currentSource
+   * 打回设置值、再靠这里异步纠正，中间存在窗口期：用户刚切到网易云就点搜索，
+   * 实际发出去的查询仍走酷我，表现成「切了源结果没变」。
    */
   private async restoreLastSource(): Promise<void> {
     try {
       const saved: string = await getStorageService().getString(HOME_SOURCE_KEY, '');
       if (isBuiltinSourceId(saved)) {
         this.currentSource = saved;
+        return;
+      }
+      const settingsSource: string = settingsService.get().searchSource;
+      if (isBuiltinSourceId(settingsSource)) {
+        this.currentSource = settingsSource;
       }
     } catch (err) {
       hilog.warn(0x0001, 'HomePage', 'restoreLastSource failed: %{public}s', JSON.stringify(err));

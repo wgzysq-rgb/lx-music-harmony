@@ -182,7 +182,6 @@ class PluginManagerImpl {
       }
 
       hilog.info(DOMAIN, TAG, 'Script downloaded, length: %{public}d', scriptContent.length);
-
       // 解析插件信息
       const meta: PluginMeta = this.parsePluginMeta(scriptContent);
       this.pluginMeta = meta;
@@ -254,9 +253,23 @@ class PluginManagerImpl {
   private async loadCustomSourceScript(source: string): Promise<string> {
     const trimmed = source.trim();
     if (/^https?:\/\//i.test(trimmed)) {
-      const task = httpRequest(trimmed, { method: 'GET' });
+      const task = httpRequest(trimmed, { method: 'GET', responseType: 'text' });
       const response = await task.promise;
-      return response.result as string;
+      // 必须用 rawText：@ohos.net.http 对 application/javascript 等非 JSON 类型
+      // 可能直接给回 ArrayBuffer，这时 response.result 不是字符串，
+      // 拿它当脚本正文会得到 "undefined.length"，后面 .match() 直接报
+      // "match is not callable" —— 表现为「导入在线源必失败」。
+      const text = response.rawText;
+      if (text && text.length > 0) {
+        return text;
+      }
+      const fallback = response.result;
+      if (typeof fallback === 'string') {
+        return fallback;
+      }
+      hilog.warn(DOMAIN, TAG, 'Script response is empty or not text (status=%{public}d)',
+        response.status);
+      return '';
     }
     return await this.readScriptFromLocalUri(trimmed);
   }
@@ -322,13 +335,22 @@ class PluginManagerImpl {
       homepage: '',
     };
 
-    // Strategy 1: Comment annotations (normal scripts)
-    // e.g., // @name MyPlugin
-    const nameMatch = script.match(/\/\/\s*@name\s+(.+)/);
-    const descMatch = script.match(/\/\/\s*@description\s+(.+)/);
-    const versionMatch = script.match(/\/\/\s*@version\s+(.+)/);
-    const authorMatch = script.match(/\/\/\s*@author\s+(.+)/);
-    const homepageMatch = script.match(/\/\/\s*@homepage\s+(.+)/);
+    // 拿到的不是字符串就不要再往下跑正则：.match 会抛
+    // "match is not callable, match is undefined"，把真正的下载问题埋掉
+    if (typeof script !== 'string' || script.length === 0) {
+      hilog.warn(DOMAIN, TAG, 'parsePluginMeta skipped: script is not a non-empty string');
+      return meta;
+    }
+
+    // Strategy 1: 注释标注。两种写法都要认：
+    //   // @name XXX          （行注释）
+    //   /*! ... * @name XXX */（块注释，LX 官方源与绝大多数第三方源都是这种）
+    // 原来只匹配 `//`，导致块注释源的名称/版本全落回默认值「自定义源」/1.0.0。
+    const nameMatch = script.match(/^\s*(?:\/\/|\*)\s*@name\s+(.+)$/m);
+    const descMatch = script.match(/^\s*(?:\/\/|\*)\s*@description\s+(.+)$/m);
+    const versionMatch = script.match(/^\s*(?:\/\/|\*)\s*@version\s+(.+)$/m);
+    const authorMatch = script.match(/^\s*(?:\/\/|\*)\s*@author\s+(.+)$/m);
+    const homepageMatch = script.match(/^\s*(?:\/\/|\*)\s*@homepage\s+(.+)$/m);
 
     if (nameMatch) meta.name = nameMatch[1].trim();
     if (descMatch) meta.description = descMatch[1].trim();
@@ -336,23 +358,30 @@ class PluginManagerImpl {
     if (authorMatch) meta.author = authorMatch[1].trim();
     if (homepageMatch) meta.homepage = homepageMatch[1].trim();
 
+    // 后面几层兜底用「是否已解析出来」判断，不再拿中文默认值做比较：
+    // 默认值是 t() 出来的，切到英文界面后 '自定义源' 这种硬编码比较必然失效。
+    const hasName = !!nameMatch;
+    const hasVersion = !!versionMatch;
+    const hasAuthor = !!authorMatch;
+    const hasDesc = !!descMatch;
+
     // Strategy 2: Object literal patterns (minified but not fully obfuscated)
     // e.g., {name:"MyPlugin",version:"2.0.0"}
     // Match quoted values in object-like context
-    if (meta.name === '自定义源') {
+    if (!hasName) {
       // Try name key-value patterns: name:"xxx", name:'xxx', n:"xxx"
       const nameKv = script.match(/(?:name|pluginName|plugin_name)\s*:\s*['"]([^'"]+)['"]/i);
       if (nameKv) meta.name = nameKv[1].trim();
     }
-    if (meta.version === '1.0.0') {
+    if (!hasVersion) {
       const verKv = script.match(/(?:version|ver|v)\s*:\s*['"]([^'"]+)['"]/i);
       if (verKv) meta.version = verKv[1].trim();
     }
-    if (meta.author === '未知') {
+    if (!hasAuthor) {
       const authorKv = script.match(/(?:author|authorName|author_name)\s*:\s*['"]([^'"]+)['"]/i);
       if (authorKv) meta.author = authorKv[1].trim();
     }
-    if (meta.description === '用户自定义音乐源') {
+    if (!hasDesc) {
       const descKv = script.match(/(?:description|desc|info)\s*:\s*['"]([^'"]+)['"]/i);
       if (descKv) meta.description = descKv[1].trim();
     }
@@ -363,7 +392,7 @@ class PluginManagerImpl {
 
     // Strategy 3: For fully obfuscated code, try to extract any useful identifier
     // from common patterns like source name at the top of the script
-    if (meta.name === '自定义源') {
+    if (!hasName && meta.name === t('custom_source_title')) {
       // Look for any source-like name in the first 500 chars
       const head = script.substring(0, 500);
       const srcName = head.match(/(?:source|site|platform)\s*:\s*['"]([^'"]+)['"]/i);

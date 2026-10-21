@@ -263,6 +263,15 @@ export function buildEnUS(): Map<string, string> {
   m.set('settings_export_list_desc', 'Export to JSON file');
   m.set('settings_import_list', 'Import Playlists');
   m.set('settings_import_list_desc', 'Import from JSON file');
+  m.set('settings_import_share_link', 'Import Playlist Link');
+  m.set('settings_import_share_link_desc', 'Paste a playlist link from NetEase / QQ / Kuwo / Kugou');
+  m.set('share_link_sheet_title', 'Import Playlist Link');
+  m.set('share_link_sheet_placeholder', 'Paste the link or the whole share text');
+  m.set('share_link_err_no_url', 'No link found. Paste the full share text.');
+  m.set('share_link_resolving', 'Resolving short link…');
+  m.set('share_link_err_short', 'Could not resolve the short link. Use the full link copied from the app.');
+  m.set('share_link_err_platform', 'Unsupported platform. Only NetEase / QQ / Kuwo / Kugou are supported.');
+  m.set('share_link_err_no_id', 'This link contains no playlist. Make sure you copied a playlist share.');
   m.set('settings_clear_cache', 'Clear Cache');
   m.set('settings_clear_cache_desc', 'Clear app cache data');
   m.set('settings_storage', 'Storage');

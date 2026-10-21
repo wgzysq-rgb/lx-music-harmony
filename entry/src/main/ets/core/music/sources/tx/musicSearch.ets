@@ -1,11 +1,14 @@
 /**
  * QQ音乐 - 歌曲搜索
  */
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { httpRequest, parseHttpBodyJson } from '../../../../core/network/http';
 import { decodeName, formatPlayTime, normalizeCoverUrl } from '../../../../utils/CommonUtils';
 import { BaseMusicSource } from '../BaseMusicSource';
 import type { MusicInfo, SearchResult, Quality, QualityDetail, MusicQualityType } from '../../../../types/MusicTypes';
 
+const TAG = 'TXMUSIC';
+const DOMAIN = 0x0001;
 const LIMIT = 30;
 
 // QQ音乐歌手信息
@@ -19,28 +22,57 @@ interface TXAlbumInfo {
   mid: string;
 }
 
+// QQ音乐文件信息（音质/媒体 mid 都在这里）
+interface TXFileInfo {
+  media_mid?: string;
+}
+
 // QQ音乐项
 interface TXMusicItem {
-  songmid: string;
+  /** 歌曲 mid（QQ 返回的字段名就是 mid，不是 songmid） */
+  mid: string;
   name: string;
   singer: TXSingerInfo[];
   album: TXAlbumInfo;
   interval: number;
-  strMediaMid: string;
-  songId: number;
+  /** 数字歌曲 id（QQ 返回的字段名就是 id，不是 songId） */
+  id: number;
+  file?: TXFileInfo;
 }
 
 // QQ音乐搜索响应数据
 interface TXSearchSongData {
   list?: TXMusicItem[];
-  total?: number;
+}
+
+/**
+ * QQ 的 musicu.fcg 响应是三层包裹：
+ *   { code, req: { code, data: { body: { song: { list } } } } }
+ *
+ * 之前这里按 { code, data: { song } } 解析 —— 少了两层，导致
+ * `body.data?.song` 永远 undefined、搜索结果恒为空列表，
+ * 上层再回退「全源聚合」，表现成「切到 QQ 音乐搜不到，全是别家的歌」。
+ * body.song 里也没有总数（meta 为空），总数用列表长度代替。
+ */
+interface TXSearchBody {
+  song?: TXSearchSongData;
 }
 
 interface TXSearchResponseData {
+  body?: TXSearchBody;
+  /** 兼容某些扁平返回 */
   song?: TXSearchSongData;
 }
+
+interface TXSearchReq {
+  code?: number;
+  data?: TXSearchResponseData;
+}
+
 interface TXSearchResponse {
   code: number;
+  req?: TXSearchReq;
+  /** 兼容某些扁平返回 */
   data?: TXSearchResponseData;
 }
 
@@ -71,9 +103,10 @@ function buildMusicInfo(rawData: TXMusicItem): MusicInfo {
     name: decodeName(rawData.name),
     singer: decodeName(rawData.singer.map((s: TXSingerInfo): string => s.name).join('、')),
     source: 'tx',
-    songmid: rawData.songmid,
-    strMediaMid: rawData.strMediaMid,
-    songId: rawData.songId,
+    songmid: rawData.mid,
+    // 取链要用 file.media_mid（通常与 mid 相同，但存在不一致的曲目）
+    strMediaMid: rawData.file?.media_mid ?? rawData.mid,
+    songId: rawData.id,
     albumId: rawData.album.mid,
     albumName: decodeName(rawData.album.name),
     interval: formatPlayTime(rawData.interval),
@@ -98,22 +131,31 @@ export const musicSearch: MusicSearchInterface = {
     headers.set('Referer', 'https://y.qq.com/');
     headers.set('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36');
 
-    return httpRequest(url, { header: headers }).promise.then((response) => {
+    // 强制按文本收：让 parseHttpBodyJson 自己处理 BOM/杂质，
+    // 避免 http 层解析失败时被下面的 catch 静默吞成空列表
+    return httpRequest(url, { header: headers, responseType: 'text' }).promise.then((response) => {
       const resultData: string | Object | ArrayBuffer = response.result as string | Object | ArrayBuffer;
       const body = parseHttpBodyJson<TXSearchResponse>(resultData);
 
       if (!body || body.code !== 0) {
+        hilog.warn(DOMAIN, TAG, 'tx search 响应异常 status=%{public}d code=%{public}d keyword=%{public}s',
+          response.status, body ? body.code : -1, keyword);
         return BaseMusicSource.buildEmptySearchResult('tx');
       }
 
-      const songData: TXSearchSongData | undefined = body.data?.song;
+      // 正常路径 req.data.body.song；扁平返回时退回 data.song
+      const root: TXSearchResponseData | undefined = body.req?.data ?? body.data;
+      const songData: TXSearchSongData | undefined = root?.body?.song ?? root?.song;
       const rawData: TXMusicItem[] = songData?.list || [];
+      hilog.info(DOMAIN, TAG, 'tx search ok keyword=%{public}s songs=%{public}d',
+        keyword, rawData.length);
       const list: MusicInfo[] = [];
       for (const item of rawData) {
         list.push(buildMusicInfo(item));
       }
-      const total: number = songData?.total || 0;
-      const allPage: number = Math.ceil(total / limit);
+      // QQ 这个接口不返回总数（body.meta 为空），用本页条数代替
+      const total: number = list.length;
+      const allPage: number = total > 0 ? 1 : 0;
 
       const result: SearchResult = {
         list,
@@ -123,7 +165,10 @@ export const musicSearch: MusicSearchInterface = {
         source: 'tx',
       };
       return result;
-    }).catch(() => BaseMusicSource.buildEmptySearchResult('tx'));
+    }).catch((e: Error) => {
+      hilog.warn(DOMAIN, TAG, 'tx search failed: %{public}s', e?.message);
+      return BaseMusicSource.buildEmptySearchResult('tx');
+    });
   },
 };
 

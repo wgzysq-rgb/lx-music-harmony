@@ -26,6 +26,25 @@ export interface QuickJSNativeModule {
   loadScript(script: string): string;
   callJS(action: string, data: string): string;
   destroy(): void;
+  /**
+   * 取一条脚本待发的 HTTP 请求（JSON 串），队列空返回空串。
+   * 形状：{"requestKey":"..","url":"..","options":{..}}
+   */
+  takePendingRequest(): string;
+  /**
+   * 把 HTTP 结果交回脚本：触发 preload 的 handleNativeResponse，
+   * 让 lx.request 的回调 resolve。
+   * 形状：{"requestKey":"..","response":{"statusCode":..,"headers":{..},"body":..}}
+   * 或    {"requestKey":"..","error":true,"errorMessage":".."}
+   */
+  completeRequest(responseJson: string): boolean;
+  /**
+   * 派遣到期定时器 + 跑完 Promise 微任务，取回脚本产出的动作结果。
+   * 返回：[{"requestKey":"..","data":{..}}]
+   */
+  pumpEvents(): string;
+  /** 还有没有待发的请求 / 到期的定时器 / 待取的结果 */
+  hasPendingWork(): boolean;
 }
 
 /** libinflate_napi.so：zlib/gzip 内存解压 */

@@ -321,6 +321,45 @@ function buildSyntheticWyPrivileges(tracks: WyTrack[]): WyPrivilege[] {
   return out;
 }
 
+/**
+ * /api/song/detail 返回的单曲。
+ *
+ * 注意它用的是**老字段名**（artists / album / duration / hMusic…），
+ * 和 playlist/detail 里 tracks 的新结构（ar / al / dt / h…）不一样。
+ */
+interface WySongDetailItem {
+  id?: number;
+  name?: string;
+  duration?: number;
+  artists?: WyArTrack[];
+  album?: WyAlTrack;
+  hMusic?: WyBitrateFile;
+  mMusic?: WyBitrateFile;
+  lMusic?: WyBitrateFile;
+  sqMusic?: WyBitrateFile;
+  hrMusic?: WyBitrateFile;
+}
+
+interface WySongDetailBody {
+  code?: number;
+  songs?: WySongDetailItem[];
+}
+
+/** 把 song/detail 的老结构换成 tracks 的新结构，好复用 filterListDetail */
+function songDetailToTrack(raw: WySongDetailItem): WyTrack {
+  const track: WyTrack = {
+    id: raw.id,
+    name: raw.name,
+    dt: raw.duration,
+    ar: raw.artists,
+    al: raw.album,
+    h: raw.hMusic,
+    l: raw.lMusic,
+    hr: raw.hrMusic,
+  };
+  return track;
+}
+
 function filterListDetail(body: WyPlaylistDetailBody): MusicInfo[] {
   const pl = body.playlist;
   if (!pl || !pl.tracks) {
@@ -476,6 +515,85 @@ class WySongListImpl implements WySongListModule {
       hilog.warn(DOMAIN, TAG, 'fetchPlaylistDetailPublic failed: %{public}s', (e as Error)?.message);
       return null;
     }
+  }
+
+  /**
+   * 按 song id 批量取详情（每批 200 条，URL 约 2.2 KB，远离各类长度上限）。
+   * 单批失败只跳过该批，不影响已拿到的部分。
+   */
+  private async fetchSongsByIds(ids: number[]): Promise<WyTrack[]> {
+    const BATCH = 200;
+    const out: WyTrack[] = [];
+    const headers: Map<string, string> = new Map();
+    headers.set('Referer', 'https://music.163.com/');
+    headers.set('User-Agent', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36');
+
+    for (let start = 0; start < ids.length; start += BATCH) {
+      const batch: number[] = ids.slice(start, start + BATCH);
+      const idJson: string = '[' + batch.join(',') + ']';
+      const url: string = `https://music.163.com/api/song/detail?ids=${encodeURIComponent(idJson)}`;
+      try {
+        const res = await httpRequest(url, { method: 'GET', header: headers, responseType: 'text' }).promise;
+        const body = parseHttpBodyJson<WySongDetailBody>(httpResponseBody(res));
+        const songs = body?.songs ?? [];
+        for (let i = 0; i < songs.length; i++) {
+          out.push(songDetailToTrack(songs[i]));
+        }
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, 'fetchSongsByIds batch@%{public}d failed: %{public}s',
+          start, (e as Error)?.message);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 补全被截断的曲目。
+   *
+   * 未登录访问 playlist/detail 时，**普通用户自建歌单的 tracks 只返回前 6 首**
+   * （trackCount 仍是真实值，trackIds 也是全量）。表现为「歌单只显示前面几首」。
+   * 官方榜单（热歌榜等）不受这个限制，所以只测榜单发现不了，一换自建歌单就露馅。
+   *
+   * 补拉之后必须**重建 privileges**：原响应只带了那 6 条的 privilege，
+   * filterListDetail 对不上号时会 `continue` 丢掉曲目 —— 补了 tracks 却没补
+   * privileges，结果还是一样少。
+   */
+  private async hydratePlaylistTracks(
+    body: WyPlaylistDetailBody | null
+  ): Promise<WyPlaylistDetailBody | null> {
+    if (body === null || !body.playlist) {
+      return body;
+    }
+    const pl = body.playlist;
+    const trackIds = pl.trackIds ?? [];
+    const loaded = pl.tracks !== undefined ? pl.tracks.length : 0;
+    if (trackIds.length === 0 || loaded >= trackIds.length) {
+      return body;
+    }
+
+    const idList: number[] = [];
+    for (let i = 0; i < trackIds.length; i++) {
+      const idValue = trackIds[i].id;
+      if (idValue !== undefined) {
+        idList.push(idValue);
+      }
+    }
+    if (idList.length === 0) {
+      return body;
+    }
+
+    const tracks = await this.fetchSongsByIds(idList);
+    if (tracks.length <= loaded) {
+      // 补拉没拿到更多，保持原样（至少还有那几首能播）
+      hilog.warn(DOMAIN, TAG, 'hydrate gave up: loaded=%{public}d fetched=%{public}d',
+        loaded, tracks.length);
+      return body;
+    }
+    hilog.info(DOMAIN, TAG, 'hydrate playlist tracks: %{public}d -> %{public}d',
+      loaded, tracks.length);
+    pl.tracks = tracks;
+    body.privileges = buildSyntheticWyPrivileges(tracks);
+    return body;
   }
 
   private tryBuildSonglistDetailResult(body: WyPlaylistDetailBody | null, page: number): SongListDetailResult | null {
@@ -663,7 +781,9 @@ class WySongListImpl implements WySongListModule {
       const cookie = resolved.cookie;
 
       const pubBody = await this.fetchPlaylistDetailPublic(id, cookie);
-      let detail = this.tryBuildSonglistDetailResult(pubBody, page);
+      // 未登录时自建歌单的 tracks 会被截到前 6 首，这里按 trackIds 补齐再组装
+      const hydratedBody = await this.hydratePlaylistTracks(pubBody);
+      let detail = this.tryBuildSonglistDetailResult(hydratedBody, page);
       if (detail !== null && (detail.list.length > 0 || detail.info.name.length > 0 || detail.total > 0)) {
         return detail;
       }

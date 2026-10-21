@@ -273,6 +273,15 @@ export function buildZhCN(): Map<string, string> {
   m.set('settings_export_list_desc', '导出歌单为JSON文件');
   m.set('settings_import_list', '导入歌单');
   m.set('settings_import_list_desc', '从JSON文件导入歌单');
+  m.set('settings_import_share_link', '导入歌单链接');
+  m.set('settings_import_share_link_desc', '粘贴网易云 / QQ音乐 / 酷我 / 酷狗的歌单分享链接');
+  m.set('share_link_sheet_title', '导入歌单链接');
+  m.set('share_link_sheet_placeholder', '粘贴分享链接，或整段分享文案');
+  m.set('share_link_err_no_url', '这段内容里没有链接，请粘贴完整的分享内容');
+  m.set('share_link_resolving', '正在解析短链…');
+  m.set('share_link_err_short', '短链解析失败，请改用App内「复制链接」得到的完整链接');
+  m.set('share_link_err_platform', '暂不支持该平台，目前仅支持网易云 / QQ音乐 / 酷我 / 酷狗');
+  m.set('share_link_err_no_id', '这条链接里没有歌单，请确认复制的是歌单分享');
   m.set('settings_clear_cache', '清除缓存');
   m.set('settings_clear_cache_desc', '清除应用缓存数据');
   m.set('settings_storage', '存储');

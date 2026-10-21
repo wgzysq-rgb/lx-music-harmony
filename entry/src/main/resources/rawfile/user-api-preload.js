@@ -458,7 +458,9 @@ globalThis.lx_setup = function(key, id, name, description, version, author, home
       },
       md5: function(str) {
         if (typeof str !== 'string') throw new Error('param required a string');
-        return nativeFuncs.utils_str2md5(encodeURIComponent(str));
+        // 契约是对「传入的字符串」直接求摘要。之前先 encodeURIComponent 再算，
+        // 凡含中文 / 空格 / & = ? / 的输入摘要都与服务端期望值不同，签名必错。
+        return nativeFuncs.utils_str2md5(str);
       },
     },
     buffer: {
@@ -505,6 +507,36 @@ globalThis.lx_setup = function(key, id, name, description, version, author, home
     },
   };
 
+  // 把响应正文交给脚本前的兼容处理。
+  //
+  // 不同源脚本对 lx.request 返回的 body 有两种预期：
+  //   a) 直接当对象用：body.code / body.data（如 ikun 系源）
+  //   b) 当字符串自己 JSON.parse(body)
+  // 用一个 String 包装对象同时满足两种：它自身带上了 JSON 里的字段（a 可用），
+  // 而 ToString 仍得到原始文本（JSON.parse / body.indexOf 等 b 可用）。
+  var makeBody = function(text) {
+    if (typeof text !== 'string' || text.length === 0) return text;
+    var head = text.charCodeAt(0);
+    if (head === 0xef || head === 0xfeff || (head !== 0x7b && head !== 0x5b)) {
+      // 纯文本（歌词、直链等）原样返回
+      return text;
+    }
+    var parsed = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      return text;
+    }
+    if (!parsed || typeof parsed !== 'object') return text;
+    var wrapped = new String(text);
+    for (var key in parsed) {
+      if (Object.prototype.hasOwnProperty.call(parsed, key)) {
+        wrapped[key] = parsed[key];
+      }
+    }
+    return wrapped;
+  };
+
   // Create the lx object
   globalThis.lx = {
     EVENT_NAMES: EVENT_NAMES,
@@ -525,12 +557,13 @@ globalThis.lx_setup = function(key, id, name, description, version, author, home
         if (err) {
           callback(err, null, null);
         } else {
+          var body = makeBody(resp.body);
           callback(err, {
             statusCode: resp.statusCode,
             statusMessage: resp.statusMessage,
             headers: resp.headers,
-            body: resp.body,
-          }, resp.body);
+            body: body,
+          }, body);
         }
       });
 

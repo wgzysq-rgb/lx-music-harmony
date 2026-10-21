@@ -19,6 +19,13 @@ export async function runSongSearch(query: string, source: Source): Promise<Sear
   }
   hilog.info(DOMAIN, TAG, 'doSearch query=%{public}s source=%{public}s count=%{public}d',
     query, source, results.length);
+  // 抽样前几条：排查「搜不到原唱」这类问题时，必须能看出实际来源源与排序，
+  // 只看 count 无法区分「wy 自己返回的」和「回退 all 聚合来的」
+  for (let k = 0; k < results.length && k < 5; k++) {
+    const r0 = results[k];
+    hilog.info(DOMAIN, TAG, '  [%{public}d] %{public}s - %{public}s (src=%{public}s)',
+      k + 1, r0.name, r0.singer, r0.source);
+  }
   const items: SearchResultItem[] = [];
   for (let i = 0; i < results.length; i++) {
     const r = results[i];

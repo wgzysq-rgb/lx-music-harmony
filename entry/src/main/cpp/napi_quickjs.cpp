@@ -1,8 +1,10 @@
 #include <node_api.h>
 #include <string>
+#include <vector>
 #include <pthread.h>
 #include <unistd.h>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <sys/time.h>
@@ -26,6 +28,69 @@ static pthread_mutex_t js_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Security key for native callbacks
 static std::string security_key;
+
+// ==================== 异步桥：待办队列 ====================
+//
+// QuickJS 是同步引擎，而 LX 源脚本的取链流程是纯异步的：
+//   lx.request(url, opts, cb) -> 等 HTTP -> cb(err, resp) -> resolve Promise -> lx.send('response')
+// 原生层不能自己发 HTTP（没有网络栈），所以把「JS 想发的请求」排队，
+// 由 ArkTS 侧（CustomSourcePlugin 的 pump）取走、用 @ohos.net.http 发出去、
+// 再把结果塞回 JS。这里就是那条队列的存放处，外加定时器队列。
+//
+// 队列用独立的 mutex，避免和 js_mutex 形成锁序问题（js_mutex 里只做 JS 操作）。
+static pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+struct PendingRequest {
+    std::string request_key;
+    std::string url;
+    std::string options_json;  // 原样保存 JS 给的 options，由 ArkTS 侧解析
+};
+
+struct PendingTimer {
+    int64_t id;
+    int64_t due_ms;
+};
+
+struct ActionResult {
+    std::string request_key;
+    std::string data_json;  // lx.send('response', ...) 的完整载荷
+};
+
+static std::vector<PendingRequest> g_requests;
+static std::vector<PendingTimer> g_timers;
+static std::vector<ActionResult> g_results;
+static int64_t g_timer_seq = 1;
+
+static int64_t NowMs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<int64_t>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
+}
+
+/** 把字符串转义成 JSON 字面量（含首尾引号） */
+static void AppendJsonString(std::string& out, const std::string& value) {
+    out += '"';
+    for (size_t i = 0; i < value.size(); i++) {
+        unsigned char c = static_cast<unsigned char>(value[i]);
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char esc[8];
+                    snprintf(esc, sizeof(esc), "\\u%04x", c);
+                    out += esc;
+                } else {
+                    out += static_cast<char>(c);
+                }
+        }
+    }
+    out += '"';
+}
+
 
 static std::string GetExceptionMessageWithStack(JSContext* ctx, JSValueConst exception) {
     const char* msg_c = JS_ToCString(ctx, exception);
@@ -156,7 +221,7 @@ static void base64_encode(const char *input, size_t input_len, char *output) {
 }
 
 // Simple Base64 decoding
-static size_t base64_decode(const char *input, size_t input_len, unsigned char *output) {
+static size_t base64_decode(const char *input, size_t input_len, unsigned char *output, size_t output_cap) {
     const char *base64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     size_t i = 0;
     size_t j = 0;
@@ -172,11 +237,20 @@ static size_t base64_decode(const char *input, size_t input_len, unsigned char *
         temp = (temp << 6) | (pos - base64_chars);
 
         if ((k + 1) % 4 == 0) {
-            output[j++] = (temp >> 16) & 0xFF;
-            if (j < 4096) output[j++] = (temp >> 8) & 0xFF;
-            if (j < 4096) output[j++] = temp & 0xFF;
+            if (j < output_cap) output[j++] = (temp >> 16) & 0xFF;
+            if (j < output_cap) output[j++] = (temp >> 8) & 0xFF;
+            if (j < output_cap) output[j++] = temp & 0xFF;
             temp = 0;
         }
+    }
+
+    // 处理不以 4 字节对齐收尾的余数（原来直接丢掉，尾部字节会少）
+    size_t rest = input_len % 4;
+    if (rest == 2) {
+        if (j < output_cap) output[j++] = (temp >> 4) & 0xFF;
+    } else if (rest == 3) {
+        if (j < output_cap) output[j++] = (temp >> 10) & 0xFF;
+        if (j < output_cap) output[j++] = (temp >> 2) & 0xFF;
     }
 
     return j;
@@ -233,16 +307,21 @@ static JSValue Native_b642buf(JSContext *ctx, JSValueConst this_val, int argc, J
     if (!input) return JS_NewArray(ctx);
 
     size_t input_len = strlen(input);
-    unsigned char output[4096];
-    memset(output, 0, sizeof(output));
+    // 原来固定 4096 字节栈缓冲：解出来的内容超过约 3KB 就被静默截断。
+    // 现在按输入长度算出上界动态分配（base64 -> 二进制是 3/4），
+    // 源脚本用它解封面/歌词这类几 KB~几十 KB 的载荷才不会丢数据。
+    size_t cap = (input_len / 4) * 3 + 4;
+    unsigned char *output = new unsigned char[cap];
+    memset(output, 0, cap);
 
-    size_t out_len = base64_decode(input, input_len, output);
+    size_t out_len = base64_decode(input, input_len, output, cap);
 
     JSValue result_array = JS_NewArray(ctx);
     for (size_t i = 0; i < out_len; i++) {
         JS_SetPropertyUint32(ctx, result_array, i, JS_NewInt32(ctx, output[i]));
     }
 
+    delete[] output;
     JS_FreeCString(ctx, input);
     return result_array;
 }
@@ -264,29 +343,83 @@ static JSValue Native_str2md5(JSContext *ctx, JSValueConst this_val, int argc, J
     return result;
 }
 
-// Native callback: AES encryption (simplified - pass through)
+/**
+ * Native callback: AES encryption
+ *
+ * 这里原来是把入参原样返回（注释写着 "simplified - pass through"）。
+ * 那是最糟的一种失败：源脚本拿自己输入的 base64 明文去请求服务端，
+ * 服务端拒绝，日志里却看不出「加密没做」，只能猜「这个源用不了」。
+ *
+ * 现在明确抛异常：脚本的 try/catch 会捕获，preload 把 errorMessage 带回来，
+ * ArkTS 侧能打出「该源依赖 AES 加密，当前引擎不支持」这样可执行的结论。
+ * 依赖 AES 的源依然用不了 —— 但至少失败原因是准确的，不会误导排查。
+ */
 static JSValue Native_aes_encrypt(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    if (argc < 4) {
-        return JS_NewString(ctx, "");
-    }
-
-    const char *data = JS_ToCString(ctx, argv[0]);
-    if (!data) return JS_NewString(ctx, "");
-
-    // Simplified: just return hex of input for demo
-    JSValue result = JS_NewString(ctx, data);
-    JS_FreeCString(ctx, data);
-    return result;
+    return JS_ThrowInternalError(ctx,
+        "lx.utils.crypto.aesEncrypt is not supported by this QuickJS build");
 }
 
-// Native callback: RSA encryption (not implemented)
+/** Native callback: RSA encryption —— 同上，原来是 return ""，同样属于静默错误 */
 static JSValue Native_rsa_encrypt(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    return JS_NewString(ctx, "");
+    return JS_ThrowInternalError(ctx,
+        "lx.utils.crypto.rsaEncrypt is not supported by this QuickJS build");
 }
 
 // Native callback: setTimeout handler
+//
+// 以前这里直接 return 0，等于把定时器整个丢掉：脚本里
+// `await new Promise(r => setTimeout(r, 300))` 会永久挂住。
+// 现在登记到 g_timers，由 ArkTS 侧的 pump 在到期后回调 __lx_native__('__set_timeout__')。
 static JSValue Native_set_timeout(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    return JS_NewInt32(ctx, 0);
+    if (argc < 2) {
+        return JS_NewInt32(ctx, 0);
+    }
+    int32_t delay = 0;
+    JS_ToInt32(ctx, &delay, argv[1]);
+    if (delay < 0) {
+        delay = 0;
+    }
+    pthread_mutex_lock(&queue_mutex);
+    PendingTimer timer;
+    timer.id = g_timer_seq++;
+    timer.due_ms = NowMs() + delay;
+    g_timers.push_back(timer);
+    pthread_mutex_unlock(&queue_mutex);
+    return JS_NewInt32(ctx, static_cast<int32_t>(timer.id));
+}
+
+/** 从 JSON 对象里取字符串字段，缺失/非字符串返回空串 */
+static std::string JsonPropString(JSContext *ctx, JSValueConst obj, const char *name) {
+    std::string out;
+    JSValue value = JS_GetPropertyStr(ctx, obj, name);
+    if (JS_IsString(value)) {
+        const char *text = JS_ToCString(ctx, value);
+        if (text) {
+            out = text;
+            JS_FreeCString(ctx, text);
+        }
+    }
+    JS_FreeValue(ctx, value);
+    return out;
+}
+
+/** 把 JSON 对象里的某个字段重新序列化成字符串（用于原样转发 options） */
+static std::string JsonPropStringify(JSContext *ctx, JSValueConst obj, const char *name) {
+    std::string out;
+    JSValue value = JS_GetPropertyStr(ctx, obj, name);
+    if (!JS_IsUndefined(value) && !JS_IsNull(value)) {
+        JSValue dumped = JS_JSONStringify(ctx, value, JS_UNDEFINED, JS_UNDEFINED);
+        if (JS_IsString(dumped)) {
+            const char *text = JS_ToCString(ctx, dumped);
+            if (text) {
+                out = text;
+                JS_FreeCString(ctx, text);
+            }
+        }
+        JS_FreeValue(ctx, dumped);
+    }
+    JS_FreeValue(ctx, value);
+    return out;
 }
 
 // Native callback: main entry point for JS -> Native calls
@@ -309,8 +442,6 @@ static JSValue Native_call(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         return JS_NewString(ctx, "{\"error\":\"Invalid key\"}");
     }
 
-    LOGI("Native_call action=%s", action);
-
     std::string data_str = "";
     if (argc > 2 && JS_IsString(argv[2])) {
         const char *data = JS_ToCString(ctx, argv[2]);
@@ -320,22 +451,112 @@ static JSValue Native_call(JSContext *ctx, JSValueConst this_val, int argc, JSVa
         }
     }
 
-    if (strcmp(action, "init") == 0) {
-        JS_FreeCString(ctx, key);
-        JS_FreeCString(ctx, action);
-        return JS_NewString(ctx, "{\"status\":\"ok\"}");
-    } else if (strcmp(action, "request") == 0) {
-        JS_FreeCString(ctx, key);
-        JS_FreeCString(ctx, action);
-        return JS_NewString(ctx, "{\"error\":\"Request not implemented\"}");
-    }
-
+    std::string action_str = action;
     JS_FreeCString(ctx, key);
     JS_FreeCString(ctx, action);
+
+    if (action_str == "init") {
+        return JS_NewString(ctx, "{\"status\":\"ok\"}");
+    }
+
+    if (action_str == "request" || action_str == "response" || action_str == "cancelRequest"
+        || action_str == "showUpdateAlert") {
+        if (data_str.empty()) {
+            return JS_NewString(ctx, "{\"status\":\"ok\"}");
+        }
+
+        // showUpdateAlert 不是取链结果，不能进响应队列：它的载荷没有 requestKey/
+        // result，混进 g_results 会让 pumpEvents 产出一条对不上号的垃圾记录。
+        if (action_str == "showUpdateAlert") {
+            LOGI("Native_call updateAlert: %.200s", data_str.c_str());
+            return JS_NewString(ctx, "{\"status\":\"ok\"}");
+        }
+
+        JSValue payload = JS_ParseJSON(ctx, data_str.c_str(), data_str.size(), "<native-call>");
+        if (JS_IsException(payload)) {
+            JSValue err = JS_GetException(ctx);
+            JS_FreeValue(ctx, err);
+            LOGW("Native_call parse failed for action=%s", action_str.c_str());
+            return JS_NewString(ctx, "{\"error\":\"Invalid payload\"}");
+        }
+
+        if (action_str == "request") {
+            PendingRequest req;
+            req.request_key = JsonPropString(ctx, payload, "requestKey");
+            req.url = JsonPropString(ctx, payload, "url");
+            req.options_json = JsonPropStringify(ctx, payload, "options");
+            if (req.options_json.empty()) {
+                req.options_json = "{}";
+            }
+            JS_FreeValue(ctx, payload);
+            pthread_mutex_lock(&queue_mutex);
+            g_requests.push_back(req);
+            size_t depth = g_requests.size();
+            pthread_mutex_unlock(&queue_mutex);
+            LOGI("Native_call queued request key=%s depth=%zu", req.request_key.c_str(), depth);
+            return JS_NewString(ctx, "{\"status\":\"pending\"}");
+        }
+
+        if (action_str == "response") {
+            ActionResult result;
+            result.request_key = JsonPropString(ctx, payload, "requestKey");
+            result.data_json = data_str;
+            JS_FreeValue(ctx, payload);
+            pthread_mutex_lock(&queue_mutex);
+            g_results.push_back(result);
+            pthread_mutex_unlock(&queue_mutex);
+            LOGI("Native_call got action result key=%s", result.request_key.c_str());
+            return JS_NewString(ctx, "{\"status\":\"ok\"}");
+        }
+
+        JS_FreeValue(ctx, payload);
+        return JS_NewString(ctx, "{\"status\":\"ok\"}");
+    }
+
+    LOGW("Native_call unknown action=%s", action_str.c_str());
     return JS_NewString(ctx, "{\"error\":\"Unknown action\"}");
 }
 
 // ==================== QuickJS Setup ====================
+
+/**
+ * 把 __lx_native_call__* 这一组 C 函数挂到全局对象上。
+ *
+ * 必须在每次 LoadScript 之前重新挂一遍：preload 里的 lx_setup() 会把它们
+ * 从 globalThis 上 delete 掉（防止脚本自己乱调），如果只在建 context 时挂一次，
+ * 那么第二次导入源（或重启后恢复上次启用的源）时 preload 就拿不到 _nativeCall，
+ * 整个 lx.request 直接抛 TypeError —— 表现就是「第一个源能用，之后怎么导都失败」。
+ */
+static void InstallGlobals(JSContext *ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__",
+        JS_NewCFunction(ctx, Native_call, "__lx_native_call__", 3));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__str2b64",
+        JS_NewCFunction(ctx, Native_str2b64, "__lx_native_call__str2b64", 1));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__utils_str2b64",
+        JS_NewCFunction(ctx, Native_str2b64, "__lx_native_call__utils_str2b64", 1));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__b642buf",
+        JS_NewCFunction(ctx, Native_b642buf, "__lx_native_call__b642buf", 1));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__utils_b642buf",
+        JS_NewCFunction(ctx, Native_b642buf, "__lx_native_call__utils_b642buf", 1));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__str2md5",
+        JS_NewCFunction(ctx, Native_str2md5, "__lx_native_call__str2md5", 1));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__utils_str2md5",
+        JS_NewCFunction(ctx, Native_str2md5, "__lx_native_call__utils_str2md5", 1));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__aes_encrypt",
+        JS_NewCFunction(ctx, Native_aes_encrypt, "__lx_native_call__aes_encrypt", 4));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__utils_aes_encrypt",
+        JS_NewCFunction(ctx, Native_aes_encrypt, "__lx_native_call__utils_aes_encrypt", 4));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__rsa_encrypt",
+        JS_NewCFunction(ctx, Native_rsa_encrypt, "__lx_native_call__rsa_encrypt", 3));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__utils_rsa_encrypt",
+        JS_NewCFunction(ctx, Native_rsa_encrypt, "__lx_native_call__utils_rsa_encrypt", 3));
+    JS_SetPropertyStr(ctx, global, "__lx_native_call__set_timeout",
+        JS_NewCFunction(ctx, Native_set_timeout, "__lx_native_call__set_timeout", 2));
+
+    JS_FreeValue(ctx, global);
+}
 
 static bool InitJSContext() {
     pthread_mutex_lock(&js_mutex);
@@ -356,41 +577,16 @@ static bool InitJSContext() {
             return false;
         }
         LOGI("JS Context created");
-
-        JSValue global = JS_GetGlobalObject(context);
-
-        JS_SetPropertyStr(context, global, "__lx_native_call__",
-            JS_NewCFunction(context, Native_call, "__lx_native_call__", 3));
-        JS_SetPropertyStr(context, global, "__lx_native_call__str2b64",
-            JS_NewCFunction(context, Native_str2b64, "__lx_native_call__str2b64", 1));
-        JS_SetPropertyStr(context, global, "__lx_native_call__utils_str2b64",
-            JS_NewCFunction(context, Native_str2b64, "__lx_native_call__utils_str2b64", 1));
-        JS_SetPropertyStr(context, global, "__lx_native_call__b642buf",
-            JS_NewCFunction(context, Native_b642buf, "__lx_native_call__b642buf", 1));
-        JS_SetPropertyStr(context, global, "__lx_native_call__utils_b642buf",
-            JS_NewCFunction(context, Native_b642buf, "__lx_native_call__utils_b642buf", 1));
-        JS_SetPropertyStr(context, global, "__lx_native_call__str2md5",
-            JS_NewCFunction(context, Native_str2md5, "__lx_native_call__str2md5", 1));
-        JS_SetPropertyStr(context, global, "__lx_native_call__utils_str2md5",
-            JS_NewCFunction(context, Native_str2md5, "__lx_native_call__utils_str2md5", 1));
-        JS_SetPropertyStr(context, global, "__lx_native_call__aes_encrypt",
-            JS_NewCFunction(context, Native_aes_encrypt, "__lx_native_call__aes_encrypt", 4));
-        JS_SetPropertyStr(context, global, "__lx_native_call__utils_aes_encrypt",
-            JS_NewCFunction(context, Native_aes_encrypt, "__lx_native_call__utils_aes_encrypt", 4));
-        JS_SetPropertyStr(context, global, "__lx_native_call__rsa_encrypt",
-            JS_NewCFunction(context, Native_rsa_encrypt, "__lx_native_call__rsa_encrypt", 3));
-        JS_SetPropertyStr(context, global, "__lx_native_call__utils_rsa_encrypt",
-            JS_NewCFunction(context, Native_rsa_encrypt, "__lx_native_call__utils_rsa_encrypt", 3));
-        JS_SetPropertyStr(context, global, "__lx_native_call__set_timeout",
-            JS_NewCFunction(context, Native_set_timeout, "__lx_native_call__set_timeout", 2));
-
-        JS_FreeValue(context, global);
+        InstallGlobals(context);
     }
     pthread_mutex_unlock(&js_mutex);
     return true;
 }
 
 // ==================== NAPI Functions ====================
+
+// 前向声明：CallJS 里要推进微任务，实现在后面的异步桥小节
+static int RunPendingJobs();
 
 static napi_value LoadScript(napi_env env, napi_callback_info info) {
     size_t argc = 1;
@@ -423,6 +619,10 @@ static napi_value LoadScript(napi_env env, napi_callback_info info) {
         security_key = DEFAULT_SECURITY_KEY;
     }
 
+    // 每次装脚本前重挂一遍原生钩子：preload 的 lx_setup 会把它们从 globalThis 删掉，
+    // 不重挂的话第二次导入源时 preload 拿不到 _nativeCall（详见 InstallGlobals 注释）。
+    InstallGlobals(context);
+
     JSValue result = JS_Eval(context, script, script_len, "<script>", JS_EVAL_TYPE_GLOBAL);
     delete[] script;
 
@@ -439,6 +639,8 @@ static napi_value LoadScript(napi_env env, napi_callback_info info) {
     }
 
     JS_FreeValue(context, result);
+    // 脚本顶层可能已经把自己塞进微任务（比如直接 send(inited) 后的 then），先跑一轮
+    RunPendingJobs();
     pthread_mutex_unlock(&js_mutex);
 
     napi_value result_val;
@@ -501,9 +703,11 @@ static napi_value CallJS(napi_env env, napi_callback_info info) {
 
     JSValue js_result = JS_Call(context, func, global_obj, 3, args);
 
+    for (int i = 0; i < 3; i++) {
+        JS_FreeValue(context, args[i]);
+    }
     JS_FreeValue(context, global_obj);
     JS_FreeValue(context, func);
-    // JS_NewString returns values that don't need to be freed separately - they are managed by GC
 
     delete[] action;
     delete[] data;
@@ -538,6 +742,8 @@ static napi_value CallJS(napi_env env, napi_callback_info info) {
     }
 
     JS_FreeValue(context, js_result);
+    // 同步调用里可能挂上了新的微任务（脚本 send(inited) 之后的 then 等），推进一轮
+    RunPendingJobs();
     pthread_mutex_unlock(&js_mutex);
 
     return result_val;
@@ -560,9 +766,292 @@ static napi_value Destroy(napi_env env, napi_callback_info info) {
     security_key.clear();
     pthread_mutex_unlock(&js_mutex);
 
+    // 引擎销毁时把异步桥的队列一起清掉：残留的 requestKey 已经不可能再被回调，
+    // 留着只会让下一次 pump 把结果丢给一个不存在的 context。
+    pthread_mutex_lock(&queue_mutex);
+    g_requests.clear();
+    g_timers.clear();
+    g_results.clear();
+    pthread_mutex_unlock(&queue_mutex);
+
     napi_value result;
     napi_get_undefined(env, &result);
     return result;
+}
+
+// ==================== 异步桥 NAPI 导出 ====================
+
+/**
+ * 调用 JS 侧的 __lx_native__(key, action, dataJson)，调用方必须已持有 js_mutex。
+ * 这是 native -> JS 的唯一入口（preload 里 jsCall 的分发点）。
+ */
+static JSValue CallNativeEntry(const char *action, const char *data_json, const char *tag) {
+    if (context == nullptr) {
+        return JS_EXCEPTION;
+    }
+    JSValue global = JS_GetGlobalObject(context);
+    JSValue func = JS_GetPropertyStr(context, global, "__lx_native__");
+    if (!JS_IsFunction(context, func)) {
+        JS_FreeValue(context, func);
+        JS_FreeValue(context, global);
+        LOGE("%s: __lx_native__ not found", tag);
+        return JS_EXCEPTION;
+    }
+
+    JSValue args[3] = {
+        JS_NewString(context, security_key.c_str()),
+        JS_NewString(context, action),
+        JS_NewString(context, data_json)
+    };
+    JSValue ret = JS_Call(context, func, global, 3, args);
+    for (int i = 0; i < 3; i++) {
+        JS_FreeValue(context, args[i]);
+    }
+    JS_FreeValue(context, func);
+    JS_FreeValue(context, global);
+
+    if (JS_IsException(ret)) {
+        JSValue exception = JS_GetException(context);
+        std::string error_text = GetExceptionMessageWithStack(context, exception);
+        LOGE("%s: %s", tag, error_text.c_str());
+        JS_FreeValue(context, exception);
+    }
+    return ret;
+}
+
+/** 跑完 JS 微任务队列（Promise then/catch），调用方必须已持有 js_mutex */
+static int RunPendingJobs() {
+    if (runtime == nullptr) {
+        return 0;
+    }
+    JSContext *ctx = context;
+    int total = 0;
+    for (int guard = 0; guard < 64; guard++) {
+        int executed = JS_ExecutePendingJob(runtime, &ctx);
+        if (executed <= 0) {
+            break;
+        }
+        total += executed;
+    }
+    return total;
+}
+
+/**
+ * takePendingRequest(): string
+ * 取一条 JS 侧待发的 HTTP 请求，返回 JSON：
+ *   {"requestKey":"...","url":"...","options":{...}}；队列为空返回空串。
+ */
+static napi_value TakePendingRequest(napi_env env, napi_callback_info info) {
+    std::string out;
+    pthread_mutex_lock(&queue_mutex);
+    if (!g_requests.empty()) {
+        PendingRequest req = g_requests.front();
+        g_requests.erase(g_requests.begin());
+        out = "{\"requestKey\":";
+        AppendJsonString(out, req.request_key);
+        out += ",\"url\":";
+        AppendJsonString(out, req.url);
+        out += ",\"options\":";
+        out += req.options_json.empty() ? "{}" : req.options_json;
+        out += "}";
+    }
+    pthread_mutex_unlock(&queue_mutex);
+
+    napi_value result_val;
+    napi_create_string_utf8(env, out.c_str(), out.size(), &result_val);
+    return result_val;
+}
+
+/**
+ * completeRequest(responseJson): boolean
+ * 把 HTTP 结果交回 JS：触发 __lx_native__('response', ...) -> preload 的
+ * handleNativeResponse -> 脚本的 request 回调 resolve -> Promise 继续往下走。
+ * responseJson 为 preload 期望的形状：
+ *   {"requestKey":"..","statusCode":200,"headers":{..},"body":..} 或 {"error":true,"errorMessage":".."}
+ */
+static napi_value CompleteRequest(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value argv[1];
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+
+    bool ok = false;
+    if (argc >= 1 && context != nullptr) {
+        size_t resp_len = 0;
+        napi_get_value_string_utf8(env, argv[0], nullptr, 0, &resp_len);
+        char *resp = new char[resp_len + 1];
+        napi_get_value_string_utf8(env, argv[0], resp, resp_len + 1, &resp_len);
+
+        pthread_mutex_lock(&js_mutex);
+        JSValue ret = CallNativeEntry("response", resp, "completeRequest");
+        ok = !JS_IsException(ret);
+        if (ok) {
+            JS_FreeValue(context, ret);
+            // 回调里可能又发了新请求 / 直接产出了结果，顺手推进一轮
+            RunPendingJobs();
+        }
+        pthread_mutex_unlock(&js_mutex);
+        delete[] resp;
+    }
+
+    napi_value result_val;
+    napi_get_boolean(env, ok, &result_val);
+    return result_val;
+}
+
+/**
+ * 把 g_results 里的一条载荷拆成 {requestKey, status, errorMessage, result}。
+ *
+ * 存进来的是 preload 里 nativeCall('response', {...}) 的原始对象：
+ *   成功：{"requestKey":"..","status":true,"result":{"source":..,"action":..,"data":..}}
+ *   失败：{"requestKey":"..","status":false,"errorMessage":".."}
+ * 必须把 result 抽出来再交给 ArkTS：直接把整个对象当 data 传，
+ * 业务层读 data.url 永远读不到（真实取链结果藏在 result.data.url 里）。
+ */
+static bool AppendActionResult(std::string& out, const std::string& payload_json) {
+    JSContext *ctx = context;
+    if (ctx == nullptr) {
+        return false;
+    }
+
+    JSValue payload = JS_ParseJSON(ctx, payload_json.c_str(), payload_json.size(), "<result>");
+    if (JS_IsException(payload)) {
+        JSValue err = JS_GetException(ctx);
+        JS_FreeValue(ctx, err);
+        return false;
+    }
+
+    std::string request_key = JsonPropString(ctx, payload, "requestKey");
+    JSValue status_val = JS_GetPropertyStr(ctx, payload, "status");
+    bool ok = !JS_IsBool(status_val) || JS_ToBool(ctx, status_val) != 0;
+    JS_FreeValue(ctx, status_val);
+
+    std::string error_message;
+    if (!ok) {
+        error_message = JsonPropString(ctx, payload, "errorMessage");
+    }
+
+    out += "{\"requestKey\":";
+    AppendJsonString(out, request_key);
+    out += ",\"status\":";
+    out += ok ? "true" : "false";
+    out += ",\"errorMessage\":";
+    AppendJsonString(out, error_message);
+    out += ",\"result\":";
+
+    JSValue result_val = JS_GetPropertyStr(ctx, payload, "result");
+    if (JS_IsUndefined(result_val) || JS_IsNull(result_val)) {
+        out += "null";
+    } else {
+        JSValue dumped = JS_JSONStringify(ctx, result_val, JS_UNDEFINED, JS_UNDEFINED);
+        if (JS_IsString(dumped)) {
+            const char *text = JS_ToCString(ctx, dumped);
+            out += (text && text[0] != '\0') ? text : "null";
+            if (text) {
+                JS_FreeCString(ctx, text);
+            }
+        } else {
+            out += "null";
+        }
+        JS_FreeValue(ctx, dumped);
+    }
+    JS_FreeValue(ctx, result_val);
+    JS_FreeValue(ctx, payload);
+    out += "}";   // 收尾 item 对象：漏了它整条就是非法 JSON，parse 失败后结果被丢弃
+    return true;
+}
+
+/**
+ * pumpEvents(): string
+ * 派遣到期的 setTimeout、跑完 JS 微任务，然后取走脚本通过 lx.send('response')
+ * 产出的结果。返回 JSON 数组：
+ *   [{"requestKey":"..","status":true,"errorMessage":"","result":{..}}]
+ *
+ * 为什么要主动 pump：QuickJS 不会自己跑 Promise 回调，脚本里的
+ * `.then(() => send(response))` 必须由宿主在执行完 IO 后再进一次 JS 才能推进。
+ */
+static napi_value PumpEvents(napi_env env, napi_callback_info info) {
+    std::string out = "[";
+
+    if (context == nullptr) {
+        out += "]";
+        napi_value result_val;
+        napi_create_string_utf8(env, out.c_str(), out.size(), &result_val);
+        return result_val;
+    }
+
+    // 1) 到期的 setTimeout 先派发
+    std::vector<int64_t> due;
+    pthread_mutex_lock(&queue_mutex);
+    int64_t now = NowMs();
+    for (size_t i = 0; i < g_timers.size();) {
+        if (g_timers[i].due_ms <= now) {
+            due.push_back(g_timers[i].id);
+            g_timers.erase(g_timers.begin() + static_cast<long>(i));
+        } else {
+            i++;
+        }
+    }
+    // 顺手把已经取走的结果腾出来，稍后统一解析
+    std::vector<ActionResult> results;
+    results.swap(g_results);
+    pthread_mutex_unlock(&queue_mutex);
+
+    pthread_mutex_lock(&js_mutex);
+    for (size_t i = 0; i < due.size(); i++) {
+        char payload[32];
+        snprintf(payload, sizeof(payload), "%lld", static_cast<long long>(due[i]));
+        JSValue ret = CallNativeEntry("__set_timeout__", payload, "pumpEvents/timer");
+        if (!JS_IsException(ret)) {
+            JS_FreeValue(context, ret);
+        }
+    }
+    // 2) 跑完 JS 微任务
+    RunPendingJobs();
+
+    // 3) 拆包（要在持有 js_mutex 时做：AppendActionResult 会碰 JS context）
+    bool first = true;
+    for (size_t i = 0; i < results.size(); i++) {
+        std::string item;
+        if (!AppendActionResult(item, results[i].data_json)) {
+            continue;
+        }
+        if (!first) {
+            out += ",";
+        }
+        out += item;
+        first = false;
+    }
+    pthread_mutex_unlock(&js_mutex);
+
+    out += "]";
+    napi_value result_val;
+    napi_create_string_utf8(env, out.c_str(), out.size(), &result_val);
+    return result_val;
+}
+
+/**
+ * hasPendingWork(): boolean
+ * pump 循环用它判断还要不要再转一轮（有请求待发 / 有到期定时器 / 有结果待取）。
+ */
+static napi_value HasPendingWork(napi_env env, napi_callback_info info) {
+    bool pending = false;
+    pthread_mutex_lock(&queue_mutex);
+    if (!g_requests.empty() || !g_results.empty()) {
+        pending = true;
+    } else {
+        int64_t now = NowMs();
+        for (size_t i = 0; i < g_timers.size(); i++) {
+            if (g_timers[i].due_ms <= now) {
+                pending = true;
+                break;
+            }
+        }
+    }
+    pthread_mutex_unlock(&queue_mutex);
+
+    napi_value result_val;
+    napi_get_boolean(env, pending, &result_val);
+    return result_val;
 }
 
 // ==================== Plain C API for dlopen/dlsym ====================
@@ -581,6 +1070,11 @@ const char* napi_loadScript(const char* script) {
     }
 
     pthread_mutex_lock(&js_mutex);
+
+    if (security_key.empty()) {
+        security_key = DEFAULT_SECURITY_KEY;
+    }
+    InstallGlobals(context);
 
     size_t script_len = strlen(script);
     JSValue result = JS_Eval(context, script, script_len, "<script>", JS_EVAL_TYPE_GLOBAL);
@@ -654,16 +1148,17 @@ const char* napi_callJS(const char* action, const char* data) {
 
     const char* result_str = JS_ToCString(context, js_result);
     JS_FreeValue(context, js_result);
-    pthread_mutex_unlock(&js_mutex);
 
-    static thread_local char result_buffer[8192];
-    strncpy(result_buffer, result_str ? result_str : "", sizeof(result_buffer) - 1);
-    result_buffer[sizeof(result_buffer) - 1] = '\0';
+    // 之前这里是 8192 的固定缓冲 + strncpy：自定义源返回的歌词/歌单 JSON 常超过 8KB，
+    // 会被静默截成非法 JSON。改成按实际长度分配。
+    static thread_local std::string result_holder;
+    result_holder = result_str ? result_str : "";
     if (result_str) {
         JS_FreeCString(context, result_str);
     }
+    pthread_mutex_unlock(&js_mutex);
 
-    return result_buffer;
+    return result_holder.c_str();
 }
 
 /**
@@ -702,6 +1197,23 @@ static napi_value Export(napi_env env, napi_value exports) {
     napi_value destroyFn;
     napi_create_function(env, "destroy", NAPI_AUTO_LENGTH, Destroy, nullptr, &destroyFn);
     napi_set_named_property(env, exports, "destroy", destroyFn);
+
+    // 异步桥：JS 的 lx.request 与实际 HTTP 之间靠这四个函数对接
+    napi_value takeFn;
+    napi_create_function(env, "takePendingRequest", NAPI_AUTO_LENGTH, TakePendingRequest, nullptr, &takeFn);
+    napi_set_named_property(env, exports, "takePendingRequest", takeFn);
+
+    napi_value completeFn;
+    napi_create_function(env, "completeRequest", NAPI_AUTO_LENGTH, CompleteRequest, nullptr, &completeFn);
+    napi_set_named_property(env, exports, "completeRequest", completeFn);
+
+    napi_value pumpFn;
+    napi_create_function(env, "pumpEvents", NAPI_AUTO_LENGTH, PumpEvents, nullptr, &pumpFn);
+    napi_set_named_property(env, exports, "pumpEvents", pumpFn);
+
+    napi_value pendingFn;
+    napi_create_function(env, "hasPendingWork", NAPI_AUTO_LENGTH, HasPendingWork, nullptr, &pendingFn);
+    napi_set_named_property(env, exports, "hasPendingWork", pendingFn);
 
     LOGI("QuickJS NAPI module exported");
     return exports;
