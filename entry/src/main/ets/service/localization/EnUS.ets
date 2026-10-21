@@ -348,6 +348,13 @@ export function buildEnUS(): Map<string, string> {
   m.set('settings_notification_image_desc', 'Show the song cover on the lock screen and media center');
   m.set('settings_bluetooth_lyric', 'Bluetooth / Car Lyrics');
   m.set('settings_bluetooth_lyric_desc', 'Write the full lyric into system media info (off: only the current line)');
+  m.set('settings_car_mode', 'Car mode');
+  m.set('settings_car_mode_desc', 'Switch to a driving-friendly layout (bigger buttons, less clutter) when HiCar is connected; force it on to preview without a car');
+  m.set('settings_car_mode_auto', 'Auto');
+  m.set('settings_car_mode_on', 'Always on');
+  m.set('settings_car_mode_off', 'Off');
+  m.set('settings_car_mode_connected', 'Car connected');
+  m.set('settings_car_mode_disconnected', 'No car detected');
   m.set('settings_auto_match_local_lyric', 'Online Match for Local Music');
   m.set('settings_auto_match_local_lyric_desc', 'Automatically match lyrics and covers when playing local tracks (once per track; correctable in Local Music)');
   m.set('settings_sleep_wait_track', 'Stop After Current Song');

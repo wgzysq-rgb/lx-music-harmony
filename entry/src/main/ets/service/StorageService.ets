@@ -280,6 +280,8 @@ interface StorageKeysInterface {
   PLAY_SAVE_TIME: string;
   PLAY_NOTIFICATION_IMAGE: string;
   PLAY_BLUETOOTH_LYRIC: string;
+  /** 车机（HiCar）模式：auto 自动识别连接 / on 强制开启 / off 关闭 */
+  CAR_MODE: string;
   LYRIC_SHOW_TRANSLATION: string;
   LYRIC_FONT_SIZE: string;
   LYRIC_ALIGN: string;
@@ -424,6 +426,7 @@ export const StorageKeys: StorageKeysInterface = {
   PLAY_SAVE_TIME: 'setting.play.savePlayTime',
   PLAY_NOTIFICATION_IMAGE: 'setting.play.notificationImage',
   PLAY_BLUETOOTH_LYRIC: 'setting.play.bluetoothLyric',
+  CAR_MODE: 'setting.car.mode',
   LYRIC_SHOW_TRANSLATION: 'setting.lyric.showTranslation',
   LYRIC_FONT_SIZE: 'setting.lyric.fontSize',
   LYRIC_ALIGN: 'setting.lyric.align',

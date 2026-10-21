@@ -120,6 +120,19 @@
           ],
           "when": "inuse"
         }
+      },
+      {
+        // 出行互联（Car Kit）：用于感知手机是否连接到 HiCar 车机，
+        // 连上时把界面切成适合驾驶的大按钮布局。
+        // 该权限为 normal + system_grant：声明即生效，无运行时弹窗、无需 ACL 审批。
+        "name": "ohos.permission.ACCESS_CAR_DISTRIBUTED_ENGINE",
+        "reason": "$string:car_permission_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "always"
+        }
       }
     ]
   }

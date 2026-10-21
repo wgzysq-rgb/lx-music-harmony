@@ -27,6 +27,7 @@ import {
   toDlFontWeight,
   toDlAnimStyle,
   toPlayMode,
+  toCarMode,
   toQuality,
   toShareType,
   toSourceList,
@@ -304,6 +305,8 @@ export async function loadSettingsFromStorage(): Promise<AppSettings> {
       StorageKeys.PLAY_NOTIFICATION_IMAGE, defaults.showNotificationImage);
     settings.showBluetoothLyric = await storage.getBoolean(
       StorageKeys.PLAY_BLUETOOTH_LYRIC, defaults.showBluetoothLyric);
+    settings.carMode = toCarMode(
+      await storage.getString(StorageKeys.CAR_MODE, defaults.carMode), defaults.carMode);
     settings.showLyricTranslation = await storage.getBoolean(
       StorageKeys.LYRIC_SHOW_TRANSLATION, defaults.showLyricTranslation);
     settings.showLyricRoma = await storage.getBoolean(StorageKeys.LYRIC_SHOW_ROMA, defaults.showLyricRoma);

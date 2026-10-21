@@ -33,6 +33,10 @@
       "value": "仅在你主动使用听歌识曲时采集环境音频用于识别歌曲"
     },
     {
+      "name": "car_permission_reason",
+      "value": "用于识别手机是否连接车机（HiCar），以切换到适合驾驶的大按钮界面"
+    },
+    {
       "name": "music_card_name",
       "value": "音乐卡片"
     },

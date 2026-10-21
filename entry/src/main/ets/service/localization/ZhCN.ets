@@ -351,6 +351,13 @@ export function buildZhCN(): Map<string, string> {
   m.set('settings_notification_image_desc', '锁屏与播控中心显示歌曲封面');
   m.set('settings_bluetooth_lyric', '蓝牙/车机歌词');
   m.set('settings_bluetooth_lyric_desc', '把整段歌词写入系统媒体信息（关闭后仅显示当前一句）');
+  m.set('settings_car_mode', '车机模式');
+  m.set('settings_car_mode_desc', '连接 HiCar 车机时自动切换为驾驶态（大按钮、精简信息）；没有车机时可强制开启预览');
+  m.set('settings_car_mode_auto', '自动识别');
+  m.set('settings_car_mode_on', '强制开启');
+  m.set('settings_car_mode_off', '关闭');
+  m.set('settings_car_mode_connected', '已连接车机');
+  m.set('settings_car_mode_disconnected', '未检测到车机');
   m.set('settings_auto_match_local_lyric', '本地音乐在线匹配');
   m.set('settings_auto_match_local_lyric_desc', '播放本地音乐时自动在线匹配歌词与封面（每首只搜一次，可在本地音乐页手动纠正）');
   m.set('settings_sleep_wait_track', '播完当前歌曲再退出');

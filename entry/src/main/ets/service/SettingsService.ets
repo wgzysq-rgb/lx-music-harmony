@@ -138,6 +138,7 @@ class SettingsServiceImpl {
     copy.savePlayTime = source.savePlayTime;
     copy.showNotificationImage = source.showNotificationImage;
     copy.showBluetoothLyric = source.showBluetoothLyric;
+    copy.carMode = source.carMode;
     copy.showLyricTranslation = source.showLyricTranslation;
     copy.showLyricRoma = source.showLyricRoma;
     copy.autoMatchLocalLyric = source.autoMatchLocalLyric;
@@ -293,6 +294,7 @@ class SettingsServiceImpl {
       savePlayTime: defaults.savePlayTime,
       showNotificationImage: defaults.showNotificationImage,
       showBluetoothLyric: defaults.showBluetoothLyric,
+      carMode: defaults.carMode,
       showLyricTranslation: defaults.showLyricTranslation,
       showLyricRoma: defaults.showLyricRoma,
       autoMatchLocalLyric: defaults.autoMatchLocalLyric,

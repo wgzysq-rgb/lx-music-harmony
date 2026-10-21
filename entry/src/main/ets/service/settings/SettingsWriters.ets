@@ -146,6 +146,11 @@ export async function applyPlaybackSettings(
       await storage.setBoolean(StorageKeys.PLAY_AUDIO_FOCUS, patch.audioFocus);
       changed.push('audioFocus');
     }
+    if (patch.carMode !== undefined && patch.carMode !== values.carMode) {
+      values.carMode = patch.carMode;
+      await storage.setString(StorageKeys.CAR_MODE, patch.carMode);
+      changed.push('carMode');
+    }
     if (patch.audioOffload !== undefined && patch.audioOffload !== values.audioOffload) {
       values.audioOffload = patch.audioOffload;
       await storage.setBoolean(StorageKeys.PLAY_AUDIO_OFFLOAD, patch.audioOffload);

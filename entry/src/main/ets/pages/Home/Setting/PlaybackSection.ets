@@ -6,6 +6,7 @@
  */
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { settingsService, type PlayMode } from '../../../service/SettingsService';
+import { carModeService, type CarModeSetting } from '../../../service/CarModeService';
 import { t } from '../../../service/LocalizationService';
 import { appToast } from '../../../service/DialogService';
 import { playerService } from '../../../service/PlayerService';
@@ -28,6 +29,10 @@ export struct PlaybackSection {
   @State savePlayTime: boolean = true;
   @State showNotificationImage: boolean = true;
   @State showBluetoothLyric: boolean = false;
+  /** 车机（HiCar）模式：auto / on / off */
+  @State carMode: string = 'auto';
+  /** 系统层面是否真的连着车机（与手动覆盖无关，用于在描述里给出诊断信息） */
+  @StorageProp('carConnected') carConnected: boolean = false;
   @State autoMatchLocalLyric: boolean = true;
   @State s2tMode: string = 'off';
   @State audioFocus: boolean = true;
@@ -64,6 +69,7 @@ export struct PlaybackSection {
     this.savePlayTime = settings.savePlayTime;
     this.showNotificationImage = settings.showNotificationImage;
     this.showBluetoothLyric = settings.showBluetoothLyric;
+    this.carMode = settings.carMode;
     this.autoMatchLocalLyric = settings.autoMatchLocalLyric;
     this.s2tMode = settings.s2tMode;
     this.audioFocus = settings.audioFocus;
@@ -103,6 +109,11 @@ export struct PlaybackSection {
       { label: t('settings_s2t_off'), value: 'off' },
       { label: t('settings_s2t_to_traditional'), value: 's2t' },
       { label: t('settings_s2t_to_simplified'), value: 't2s' },
+    ];
+    const carModeOptions: SettingOption[] = [
+      { label: t('settings_car_mode_auto'), value: 'auto' },
+      { label: t('settings_car_mode_on'), value: 'on' },
+      { label: t('settings_car_mode_off'), value: 'off' },
     ];
 
     const items: SettingSectionItem[] = [];
@@ -176,6 +187,14 @@ export struct PlaybackSection {
       this.showBluetoothLyric = value;
       void settingsService.update({ showBluetoothLyric: value });
     }, t('settings_bluetooth_lyric_desc')));
+
+    items.push(selectRow(t('settings_car_mode'), this.carMode, carModeOptions, (value: string): void => {
+      this.carMode = value;
+      void settingsService.update({ carMode: value as CarModeSetting });
+      // 立即生效：不必等下一次设置同步，无车机时也能马上看到驾驶态
+      carModeService.applySetting(value as CarModeSetting);
+    }, `${t('settings_car_mode_desc')} · ${this.carConnected
+      ? t('settings_car_mode_connected') : t('settings_car_mode_disconnected')}`));
 
     items.push(toggleRow(t('settings_auto_match_local_lyric'), this.autoMatchLocalLyric, (value: boolean): void => {
       this.autoMatchLocalLyric = value;

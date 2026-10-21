@@ -22,6 +22,8 @@ USAGE_HINTS = {
     'ohos.permission.KEEP_BACKGROUND_RUNNING': [r'backgroundTaskManager'],
     'ohos.permission.VIBRATE': [r'vibrator\.', r'HapticFeedback'],
     'ohos.permission.MICROPHONE': [r'createAudioCapturer', r'requestPermissionsFromUser'],
+    # normal + system_grant：声明即生效，只用于感知 HiCar 连接状态（不涉及导航）
+    'ohos.permission.ACCESS_CAR_DISTRIBUTED_ENGINE': [r'getSmartMobilityAwareness', r'@kit\.CarKit'],
 }
 
 

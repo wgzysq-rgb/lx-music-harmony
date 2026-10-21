@@ -33,6 +33,10 @@
       "value": "Used to capture ambient audio only when you actively use song recognition"
     },
     {
+      "name": "car_permission_reason",
+      "value": "Used to detect whether the phone is connected to HiCar, so the app can switch to a driving-friendly layout"
+    },
+    {
       "name": "music_card_name",
       "value": "Music Card"
     },

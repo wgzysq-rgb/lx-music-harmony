@@ -21,6 +21,7 @@ import { runBootstrapAfterServices } from '../bootstrap/AppBootstrap';
 import { initLocalization } from '../../service/LocalizationService';
 import { setQuickJSContext } from '../../core/napi/napi_quickjs';
 import { backgroundRunningManager } from '../../service/BackgroundRunningManager';
+import { carModeService } from '../../service/CarModeService';
 import { mediaSaveService } from '../../service/MediaSaveService';
 import { localMusicService } from '../../service/LocalMusicService';
 import { logService } from '../../service/LogService';
@@ -76,6 +77,9 @@ export default class EntryAbility extends UIAbility {
     this.initGlobalState();
     // 初始化后台任务管理器（传入 context 用于后续长时任务申请）
     backgroundRunningManager.init(this.context);
+    // 车机（HiCar）感知：尽早订阅，应用可能在已连车机时被拉起。
+    // 无车机能力的设备上内部会自行跳过，不会阻断启动。
+    carModeService.init();
     // 注册桌面卡片动作处理：卡片点击/控制按钮通过 postCardAction 以 callee 消息送达。
     // 回调跑在 IPC 线程，直接调播放器会崩，必须 setTimeout(0) 跳回 JS 主线程再派发。
     // callee 注册会抛异常：注册失败只是「卡片按钮点了没反应」，不该拖垮启动
@@ -149,6 +153,8 @@ export default class EntryAbility extends UIAbility {
     playerService.destroy();
     // 清理后台任务资源
     void backgroundRunningManager.destroy();
+    // 退订车机连接状态，避免回调打到已销毁的界面
+    carModeService.destroy();
     // 停止卡片推送与订阅
     cardFormService.stop();
     try {

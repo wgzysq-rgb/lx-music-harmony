@@ -15,6 +15,11 @@ export { toDownloadFileNameFormat } from '../../core/music/MusicTitle';
 
 /** 播放模式 */
 export type PlayMode = 'listLoop' | 'singleLoop' | 'random' | 'sequential';
+/**
+ * 车机（HiCar）模式：auto 跟随系统连接状态，on 强制开启，off 关闭。
+ * on/off 是给没有车机的环境（模拟器、开发机）预览与验收驾驶态用的。
+ */
+export type CarModeSetting = 'auto' | 'on' | 'off';
 /** 主题明暗模式 */
 export type ThemeMode = 'light' | 'dark';
 /** 启动页面 */
@@ -85,6 +90,8 @@ export interface AppSettings {
    * （安卓版 player.isShowBluetoothLyric；关闭时只推送当前句，播控/锁屏仍正常）
    */
   showBluetoothLyric: boolean;
+  /** 车机（HiCar）模式：连接车机时切换为驾驶态大按钮布局 */
+  carMode: CarModeSetting;
   /** 歌词是否显示翻译 */
   showLyricTranslation: boolean;
   /** 歌词是否显示罗马音（拼音） */
@@ -258,6 +265,8 @@ export interface SettingsPatch {
   savePlayTime?: boolean;
   showNotificationImage?: boolean;
   showBluetoothLyric?: boolean;
+  /** 车机（HiCar）模式 */
+  carMode?: CarModeSetting;
   showLyricTranslation?: boolean;
   showLyricRoma?: boolean;
   autoMatchLocalLyric?: boolean;
@@ -370,6 +379,7 @@ export function createDefaultSettings(): AppSettings {
     savePlayTime: true,
     showNotificationImage: true,
     showBluetoothLyric: false,
+    carMode: 'auto',
     showLyricTranslation: true,
     wordLyric: true,
     showLyricRoma: false,
@@ -469,6 +479,14 @@ export function toPlayMode(value: string, fallback: PlayMode): PlayMode {
 
 export function toThemeMode(value: string, fallback: ThemeMode): ThemeMode {
   return value === 'dark' ? 'dark' : (value === 'light' ? 'light' : fallback);
+}
+
+/** 车机模式取值收敛：非法值一律回落到 fallback（旧配置读不到时保持 auto） */
+export function toCarMode(value: string, fallback: CarModeSetting): CarModeSetting {
+  if (value === 'auto' || value === 'on' || value === 'off') {
+    return value;
+  }
+  return fallback;
 }
 
 export function toStartupPage(value: string, fallback: StartupPage): StartupPage {
